@@ -1,0 +1,243 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<HTML>
+ <HEAD>
+   <TITLE> [Opendesktop-svn] r11 - trunk/IPlugin
+   </TITLE>
+   <LINK REL="Index" HREF="http://lists.berlios.de/pipermail/opendesktop-svn/2006-January/index.html" >
+   <LINK REL="made" HREF="mailto:opendesktop-svn%40lists.berlios.de?Subject=Re%3A%20%5BOpendesktop-svn%5D%20r11%20-%20trunk/IPlugin&In-Reply-To=%3C200601221120.k0MBKSi2024346%40sheep.berlios.de%3E">
+   <META NAME="robots" CONTENT="index,nofollow">
+   <style type="text/css">
+       pre {
+           white-space: pre-wrap;       /* css-2.1, curent FF, Opera, Safari */
+           }
+   </style>
+   <META http-equiv="Content-Type" content="text/html; charset=us-ascii">
+   <LINK REL="Previous"  HREF="000005.html">
+   <LINK REL="Next"  HREF="000007.html">
+ </HEAD>
+ <BODY BGCOLOR="#ffffff">
+   <H1>[Opendesktop-svn] r11 - trunk/IPlugin</H1>
+    <B>pravin at BerliOS</B> 
+    <A HREF="mailto:opendesktop-svn%40lists.berlios.de?Subject=Re%3A%20%5BOpendesktop-svn%5D%20r11%20-%20trunk/IPlugin&In-Reply-To=%3C200601221120.k0MBKSi2024346%40sheep.berlios.de%3E"
+       TITLE="[Opendesktop-svn] r11 - trunk/IPlugin">pravin at berlios.de
+       </A><BR>
+    <I>Sun Jan 22 12:20:28 CET 2006</I>
+    <P><UL>
+        <LI>Previous message: <A HREF="000005.html">[Opendesktop-svn] r10 - in trunk: . IPlugin
+</A></li>
+        <LI>Next message: <A HREF="000007.html">[Opendesktop-svn] r12 - in trunk: . IPlugin OpenDesktop WebRoot YammyPlugin
+</A></li>
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#6">[ date ]</a>
+              <a href="thread.html#6">[ thread ]</a>
+              <a href="subject.html#6">[ subject ]</a>
+              <a href="author.html#6">[ author ]</a>
+         </LI>
+       </UL>
+    <HR>  
+<!--beginarticle-->
+<PRE>Author: pravin
+Date: 2006-01-22 12:20:28 +0100 (Sun, 22 Jan 2006)
+New Revision: 11
+
+Added:
+   trunk/IPlugin/IPlugin.cs
+   trunk/IPlugin/IPlugin.csproj
+Removed:
+   trunk/IPlugin/ODIPlugin.cs
+   trunk/IPlugin/ODIPlugin.csproj
+Log:
+Renamed ODIPlugin to IPlugin
+
+Copied: trunk/IPlugin/IPlugin.cs (from rev 10, trunk/IPlugin/ODIPlugin.cs)
+
+Copied: trunk/IPlugin/IPlugin.csproj (from rev 10, trunk/IPlugin/ODIPlugin.csproj)
+
+Deleted: trunk/IPlugin/ODIPlugin.cs
+===================================================================
+--- trunk/IPlugin/ODIPlugin.cs	2006-01-22 11:19:32 UTC (rev 10)
++++ trunk/IPlugin/ODIPlugin.cs	2006-01-22 11:20:28 UTC (rev 11)
+@@ -1,103 +0,0 @@
+-// OpenDesktop - A search tool for the Windows desktop
+-// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
+-// <A HREF="http://opendesktop.berlios.de">http://opendesktop.berlios.de</A>
+-//
+-// This program is free software; you can redistribute it and/or
+-// modify it under the terms of the GNU General Public License
+-// as published by the Free Software Foundation; either version 2
+-// of the License, or (at your option) any later version.
+-//
+-// This program is distributed in the hope that it will be useful,
+-// but WITHOUT ANY WARRANTY; without even the implied warranty of
+-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-// GNU General Public License for more details.
+-//
+-// You should have received a copy of the GNU General Public License
+-// along with this program; if not, write to the Free Software
+-// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+-using System;
+-using System.Collections;
+-using System.Collections.Specialized;
+-
+-namespace ODIPlugin
+-{
+-    #region class SearchInfo
+-    /// &lt;summary&gt;
+-    /// Contains info about the file to facilitate Indexing
+-    /// &lt;/summary&gt;
+-    public class SearchInfo
+-    {
+-        #region Member Variables
+-        private string m_strTitle;
+-        private string m_strText;
+-        private string m_strLauncher;
+-        #endregion
+-
+-        #region Constructor
+-        public SearchInfo(string title, string text)
+-        {
+-            m_strTitle = title;
+-            m_strText = text;
+-            m_strLauncher = null;
+-        }
+-        public SearchInfo(string title, string text, string launcher)
+-        {
+-            m_strTitle = title;
+-            m_strText = text;
+-            m_strLauncher = launcher;
+-        }
+-        #endregion
+-
+-        #region Properties
+-        public string Title
+-        {
+-            get { return m_strTitle; }
+-        }
+-        public string Text
+-        {
+-            get { return m_strText; }
+-        }
+-        public string Launcher
+-        {
+-            get { return m_strLauncher; }
+-        }
+-        #endregion
+-    }
+-    #endregion
+-
+-    #region IPlugin Interface
+-    public interface IPlugin
+-    {
+-        /// &lt;summary&gt;
+-        /// Enter tags that you want to register here. If a tag is registered by 
+-        /// another plugin and you try to register it again, your registration 
+-        /// will fail. While not a rule, do use tags of the form: PluginName.TagName
+-        /// &lt;/summary&gt;
+-        string[] RegisteredHTMLTags { get;}
+-        /// &lt;summary&gt;
+-        /// Name of plugin. Shows up on the plugins config page
+-        /// &lt;/summary&gt;
+-        string PluginName { get;}
+-        /// &lt;summary&gt;
+-        /// File extensions on which Yammy will call this plugin
+-        /// &lt;/summary&gt;
+-        string[] RegisteredFileExtentions { get;}
+-
+-        /// &lt;summary&gt;
+-        /// Extract indexable content from filePath
+-        /// &lt;/summary&gt;
+-        /// &lt;param name=&quot;filePath&quot;&gt;file to parse&lt;/param&gt;
+-        /// &lt;returns&gt;IndexVars object&lt;/returns&gt;
+-        SearchInfo ProcessFile(string filePath);
+-
+-        /// &lt;summary&gt;
+-        /// Process the Registered tag
+-        /// &lt;/summary&gt;
+-        /// &lt;param name=&quot;tag&quot;&gt;Tag that this plugin has registered&lt;/param&gt;
+-        /// &lt;param name=&quot;queryString&quot;&gt;QueryString of the request. 
+-        /// Use this as arguments to your function.&lt;/param&gt;
+-        /// &lt;returns&gt;Text to replace this tag with&lt;/returns&gt;
+-        string ProcessTag(string tag, NameValueCollection queryString);
+-    }
+-    #endregion
+-}
+
+Deleted: trunk/IPlugin/ODIPlugin.csproj
+===================================================================
+--- trunk/IPlugin/ODIPlugin.csproj	2006-01-22 11:19:32 UTC (rev 10)
++++ trunk/IPlugin/ODIPlugin.csproj	2006-01-22 11:20:28 UTC (rev 11)
+@@ -1,49 +0,0 @@
+-&#65279;&lt;Project DefaultTargets=&quot;Build&quot; xmlns=&quot;<A HREF="http://schemas.microsoft.com/developer/msbuild/2003">http://schemas.microsoft.com/developer/msbuild/2003</A>&quot;&gt;
+-  &lt;PropertyGroup&gt;
+-    &lt;Configuration Condition=&quot; '$(Configuration)' == '' &quot;&gt;Debug&lt;/Configuration&gt;
+-    &lt;Platform Condition=&quot; '$(Platform)' == '' &quot;&gt;AnyCPU&lt;/Platform&gt;
+-    &lt;ProductVersion&gt;8.0.50727&lt;/ProductVersion&gt;
+-    &lt;SchemaVersion&gt;2.0&lt;/SchemaVersion&gt;
+-    &lt;ProjectGuid&gt;{99E38044-8BFC-4805-94F9-84C275E3120D}&lt;/ProjectGuid&gt;
+-    &lt;OutputType&gt;Library&lt;/OutputType&gt;
+-    &lt;AppDesignerFolder&gt;Properties&lt;/AppDesignerFolder&gt;
+-    &lt;RootNamespace&gt;ODIPlugin&lt;/RootNamespace&gt;
+-    &lt;AssemblyName&gt;ODIPlugin&lt;/AssemblyName&gt;
+-  &lt;/PropertyGroup&gt;
+-  &lt;PropertyGroup Condition=&quot; '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' &quot;&gt;
+-    &lt;DebugSymbols&gt;true&lt;/DebugSymbols&gt;
+-    &lt;DebugType&gt;full&lt;/DebugType&gt;
+-    &lt;Optimize&gt;false&lt;/Optimize&gt;
+-    &lt;OutputPath&gt;..\OpenDesktop\bin\Debug\&lt;/OutputPath&gt;
+-    &lt;DefineConstants&gt;TRACE;DEBUG&lt;/DefineConstants&gt;
+-    &lt;ErrorReport&gt;prompt&lt;/ErrorReport&gt;
+-    &lt;WarningLevel&gt;4&lt;/WarningLevel&gt;
+-  &lt;/PropertyGroup&gt;
+-  &lt;PropertyGroup Condition=&quot; '$(Configuration)|$(Platform)' == 'Release|AnyCPU' &quot;&gt;
+-    &lt;DebugType&gt;pdbonly&lt;/DebugType&gt;
+-    &lt;Optimize&gt;false&lt;/Optimize&gt;
+-    &lt;OutputPath&gt;..\OpenDesktop\bin\Release\&lt;/OutputPath&gt;
+-    &lt;DefineConstants&gt;TRACE;DEBUG&lt;/DefineConstants&gt;
+-    &lt;ErrorReport&gt;prompt&lt;/ErrorReport&gt;
+-    &lt;WarningLevel&gt;4&lt;/WarningLevel&gt;
+-  &lt;/PropertyGroup&gt;
+-  &lt;ItemGroup&gt;
+-    &lt;Reference Include=&quot;System&quot; /&gt;
+-  &lt;/ItemGroup&gt;
+-  &lt;ItemGroup&gt;
+-    &lt;Compile Include=&quot;ODIPlugin.cs&quot; /&gt;
+-    &lt;Compile Include=&quot;Properties\AssemblyInfo.cs&quot; /&gt;
+-  &lt;/ItemGroup&gt;
+-  &lt;Import Project=&quot;$(MSBuildBinPath)\Microsoft.CSharp.targets&quot; /&gt;
+-  &lt;!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+-       Other similar extension points exist, see Microsoft.Common.targets.
+-  &lt;Target Name=&quot;BeforeBuild&quot;&gt;
+-  &lt;/Target&gt;
+-  &lt;Target Name=&quot;AfterBuild&quot;&gt;
+-  &lt;/Target&gt;
+-  --&gt;
+-  &lt;PropertyGroup&gt;
+-    &lt;PostBuildEvent&gt;
+-    &lt;/PostBuildEvent&gt;
+-  &lt;/PropertyGroup&gt;
+-&lt;/Project&gt;
+\ No newline at end of file
+
+
+</PRE>
+
+<!--endarticle-->
+    <HR>
+    <P><UL>
+        <!--threads-->
+	<LI>Previous message: <A HREF="000005.html">[Opendesktop-svn] r10 - in trunk: . IPlugin
+</A></li>
+	<LI>Next message: <A HREF="000007.html">[Opendesktop-svn] r12 - in trunk: . IPlugin OpenDesktop WebRoot YammyPlugin
+</A></li>
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#6">[ date ]</a>
+              <a href="thread.html#6">[ thread ]</a>
+              <a href="subject.html#6">[ subject ]</a>
+              <a href="author.html#6">[ author ]</a>
+         </LI>
+       </UL>
+
+<hr>
+<a href="https://lists.berlios.de/mailman/listinfo/opendesktop-svn">More information about the Opendesktop-svn
+mailing list</a><br>
+</body></html>

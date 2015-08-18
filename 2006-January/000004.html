@@ -1,0 +1,513 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<HTML>
+ <HEAD>
+   <TITLE> [Opendesktop-svn] r9 - in trunk: OpenDesktop WebRoot
+   </TITLE>
+   <LINK REL="Index" HREF="http://lists.berlios.de/pipermail/opendesktop-svn/2006-January/index.html" >
+   <LINK REL="made" HREF="mailto:opendesktop-svn%40lists.berlios.de?Subject=Re%3A%20%5BOpendesktop-svn%5D%20r9%20-%20in%20trunk%3A%20OpenDesktop%20WebRoot&In-Reply-To=%3C200601091738.k09HcUqp004681%40sheep.berlios.de%3E">
+   <META NAME="robots" CONTENT="index,nofollow">
+   <style type="text/css">
+       pre {
+           white-space: pre-wrap;       /* css-2.1, curent FF, Opera, Safari */
+           }
+   </style>
+   <META http-equiv="Content-Type" content="text/html; charset=us-ascii">
+   <LINK REL="Previous"  HREF="000003.html">
+   <LINK REL="Next"  HREF="000005.html">
+ </HEAD>
+ <BODY BGCOLOR="#ffffff">
+   <H1>[Opendesktop-svn] r9 - in trunk: OpenDesktop WebRoot</H1>
+    <B>pravin at BerliOS</B> 
+    <A HREF="mailto:opendesktop-svn%40lists.berlios.de?Subject=Re%3A%20%5BOpendesktop-svn%5D%20r9%20-%20in%20trunk%3A%20OpenDesktop%20WebRoot&In-Reply-To=%3C200601091738.k09HcUqp004681%40sheep.berlios.de%3E"
+       TITLE="[Opendesktop-svn] r9 - in trunk: OpenDesktop WebRoot">pravin at berlios.de
+       </A><BR>
+    <I>Mon Jan  9 18:38:30 CET 2006</I>
+    <P><UL>
+        <LI>Previous message: <A HREF="000003.html">[Opendesktop-svn] r7 - trunk/OpenDesktop
+</A></li>
+        <LI>Next message: <A HREF="000005.html">[Opendesktop-svn] r10 - in trunk: . IPlugin
+</A></li>
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#4">[ date ]</a>
+              <a href="thread.html#4">[ thread ]</a>
+              <a href="subject.html#4">[ subject ]</a>
+              <a href="author.html#4">[ author ]</a>
+         </LI>
+       </UL>
+    <HR>  
+<!--beginarticle-->
+<PRE>Author: pravin
+Date: 2006-01-09 18:38:28 +0100 (Mon, 09 Jan 2006)
+New Revision: 9
+
+Removed:
+   trunk/OpenDesktop/yammy.ICO
+Modified:
+   trunk/OpenDesktop/FileExplorer.cs
+   trunk/WebRoot/style.css
+Log:
+Replaced space with tabs
+
+Modified: trunk/OpenDesktop/FileExplorer.cs
+===================================================================
+--- trunk/OpenDesktop/FileExplorer.cs	2006-01-08 10:50:20 UTC (rev 8)
++++ trunk/OpenDesktop/FileExplorer.cs	2006-01-09 17:38:28 UTC (rev 9)
+@@ -25,201 +25,209 @@
+ 
+ namespace OpenDesktop
+ {
+-    /// &lt;summary&gt;
+-    /// Public delegate which tells how many documents have been indexed
+-    /// &lt;/summary&gt;
+-    /// &lt;param name=&quot;numDocs&quot;&gt;number of documents already indexed&lt;/param&gt;
+-    public delegate void IndexProgressHandler(int numDocs);
++	/// &lt;summary&gt;
++	/// Public delegate which tells how many documents have been indexed
++	/// &lt;/summary&gt;
++	/// &lt;param name=&quot;numDocs&quot;&gt;number of documents already indexed&lt;/param&gt;
++	public delegate void IndexProgressHandler(int numDocs);
+ 
+-    class FileExplorer : IDisposable
+-    {
+-        #region Private Vars
+-        private NameObjectCollection m_fileFunctionMap;
+-        private Thread m_objThread;
+-        private bool _quit;
+-        private Hashtable m_htDNV; // Donot visit hashmap
+-        Indexer m_indexer;
+-        private int m_iNumDocsDone;
+-        private bool m_bAgressive; // true = dont sleep between documents
+-        #endregion
++	class FileExplorer : IDisposable
++	{
++		#region Private Vars
++		private NameObjectCollection m_fileFunctionMap;
++		private Thread m_objThread;
++		private bool _quit;
++		private Hashtable m_htDNV; // Donot visit hashmap
++		Indexer m_indexer;
++		private int m_iNumDocsDone;
++		private bool m_bAgressive; // true = dont sleep between documents
++		#endregion
+ 
+-        #region Public Events
+-        public event IndexProgressHandler IndexProgress;
+-        private void OnIndexProgress(int numDocs)
+-        {
+-            if (IndexProgress != null)
+-            {
+-                IndexProgress(numDocs);
+-            }
+-        }
+-        #endregion
++		#region Public Events
++		public event IndexProgressHandler IndexProgress;
++		private void OnIndexProgress(int numDocs)
++		{
++			if (IndexProgress != null)
++			{
++				IndexProgress(numDocs);
++			}
++		}
++		#endregion
+ 
+-        #region Constructor
+-        public FileExplorer(NameObjectCollection fileFunctionMap)
+-        {
+-            m_fileFunctionMap = fileFunctionMap;
+-            _quit = false;
+-            //TODO: m_htDNV = 
+-            m_indexer = new Indexer(Properties.Settings.Default.NewIndexPath, IndexMode.CREATE);
+-        }
++		#region Constructor
++		public FileExplorer(NameObjectCollection fileFunctionMap)
++		{
++			m_fileFunctionMap = fileFunctionMap;
++			_quit = false;
++			//TODO: m_htDNV = 
++			m_indexer = new Indexer(Properties.Settings.Default.NewIndexPath, IndexMode.CREATE);
++		}
+ 
+-        public void Dispose()
+-        {
+-            if (m_objThread != null)
+-            {
+-                m_objThread.Abort();
+-            }
+-            if (m_indexer != null)
+-            {
+-                m_indexer.Close();
+-            }
+-        }
+-        #endregion
++		public void Dispose()
++		{
++			if (m_objThread != null)
++			{
++				m_objThread.Abort();
++			}
++			if (m_indexer != null)
++			{
++				m_indexer.Close();
++			}
++		}
++		#endregion
+ 
+-        #region Run/Stop/Pause/Resume
+-        public void Run()
+-        {
+-            m_iNumDocsDone = 0;
++		#region Run/Stop/Pause/Resume
++		public void Run()
++		{
++			m_iNumDocsDone = 0;
+ 
+-            // Check if an update of the index is due
+-            TimeSpan objUpdateFrequency = new TimeSpan(Properties.Settings.Default.IndexUpdateFrequency, 0, 0);
+-            if (DateTime.Now.Subtract(Properties.Settings.Default.IndexLastUpdated) &lt; objUpdateFrequency)
+-            {
+-                Logger.Instance.LogDebug(&quot;Update time not elapsed. Exiting FileExplorer&quot;);
+-                return;
+-            }
++			// Check if an update of the index is due
++			TimeSpan objUpdateFrequency = new TimeSpan(Properties.Settings.Default.IndexUpdateFrequency, 0, 0);
++			if (DateTime.Now.Subtract(Properties.Settings.Default.IndexLastUpdated) &lt; objUpdateFrequency)
++			{
++				Logger.Instance.LogDebug(&quot;Update time not elapsed. Exiting FileExplorer&quot;);
++				return;
++			}
+ 
+-            m_objThread = new Thread(new ThreadStart(Explore));
+-            m_objThread.Priority = ThreadPriority.Lowest;
+-            m_objThread.Name = &quot;FileExplorer&quot;;
+-            try
+-            {
+-                m_objThread.Start();
+-            }
+-            catch (Exception e)
+-            {
+-                Logger.Instance.LogException(e);
+-            }
+-        }
++			m_objThread = new Thread(new ThreadStart(Explore));
++			m_objThread.Priority = ThreadPriority.Lowest;
++			m_objThread.Name = &quot;FileExplorer&quot;;
++			try
++			{
++				m_objThread.Start();
++			}
++			catch (Exception e)
++			{
++				Logger.Instance.LogException(e);
++			}
++		}
+ 
+-        public void Pause()
+-        {
+-            if (m_objThread != null &amp;&amp; m_objThread.ThreadState == ThreadState.Running)
+-            {
+-                m_objThread.Suspend();
+-            }
+-        }
++		public void Pause()
++		{
++			if (m_objThread != null &amp;&amp; m_objThread.ThreadState == ThreadState.Running)
++			{
++				m_objThread.Suspend();
++			}
++		}
+ 
+-        public void Resume()
+-        {
+-            if (m_objThread != null &amp;&amp; m_objThread.ThreadState == ThreadState.Suspended)
+-            {
+-                m_objThread.Resume();
+-            }
+-        }
++		public void Resume()
++		{
++			if (m_objThread != null &amp;&amp; m_objThread.ThreadState == ThreadState.Suspended)
++			{
++				m_objThread.Resume();
++			}
++		}
+ 
+-        public void Stop()
+-        {
+-            _quit = true;
+-        }
+-        #endregion
++		public void Stop()
++		{
++			_quit = true;
++		}
++		#endregion
+ 
+-        /// &lt;summary&gt;
+-        /// Explores
+-        /// &lt;/summary&gt;
+-        private void Explore()
+-        {
+-            string [] strDriveList = Environment.GetLogicalDrives();
+-            foreach (string strDrive in strDriveList)
+-            {
+-                DriveInfo info = new DriveInfo(strDrive);
+-                if (info.IsReady)
+-                {
+-                    Explore(strDrive);
+-                }
+-            }
+-            
+-            if (!_quit) // If the exit was natural
+-            {
+-                Logger.Instance.LogDebug(&quot;Moving index from &quot; +
+-                    Properties.Settings.Default.IndexPath + &quot; to &quot; +
+-                    Properties.Settings.Default.NewIndexPath);
+-                // Close index and move it 
+-                m_indexer.Close(); m_indexer = null;
++		/// &lt;summary&gt;
++		/// Explores
++		/// &lt;/summary&gt;
++		private void Explore()
++		{
++			string [] strDriveList = Environment.GetLogicalDrives();
++			foreach (string strDrive in strDriveList)
++			{
++				DriveInfo info = new DriveInfo(strDrive);
++				if (info.IsReady)
++				{
++					Logger.Instance.LogDebug(&quot;Exploring &quot; + strDrive);
++					Explore(strDrive);
++				}
++			}
+ 
+-                // Lock the index as we are going to be moving it
+-                // FIXME: RACE CONDITION!!!! The code below is useless
+-                Synchronizer.Instance.LockIndex(this);
+-                Directory.Delete(Properties.Settings.Default.IndexPath, true);
+-                Directory.Move(Properties.Settings.Default.NewIndexPath, 
+-                    Properties.Settings.Default.IndexPath);
+-                Synchronizer.Instance.ReleaseIndex(this);
++			if (!_quit) // If the exit was natural
++			{
++				Logger.Instance.LogDebug(&quot;Moving index from &quot; +
++					Properties.Settings.Default.IndexPath + &quot; to &quot; +
++					Properties.Settings.Default.NewIndexPath);
++				// Close index and move it 
++				m_indexer.Close(); m_indexer = null;
+ 
+-                Properties.Settings.Default.IndexLastUpdated = DateTime.Now;
+-                Properties.Settings.Default.Save();
+-            }
+-        }
++				// Lock the index as we are going to be moving it
++				// FIXME: RACE CONDITION!!!! The code below is useless
++				Synchronizer.Instance.LockIndex(this);
++				try
++				{
++					Directory.Delete(Properties.Settings.Default.IndexPath, true);
++					Directory.Move(Properties.Settings.Default.NewIndexPath,
++						Properties.Settings.Default.IndexPath);
++					Synchronizer.Instance.ReleaseIndex(this);
+ 
+-        private void Explore(string directory)
+-        {
+-            if (_quit)
+-                return;
++					Properties.Settings.Default.IndexLastUpdated = DateTime.Now;
++					Properties.Settings.Default.Save();
++				}
++				catch (Exception e)
++				{
++					Logger.Instance.LogException(e);
++				}
++			}
++		}
+ 
+-            string[] strDirList;
+-            string[] strFileList;
+-            
+-            try
+-            {
+-                strDirList = Directory.GetDirectories(directory);
+-                strFileList = Directory.GetFiles(directory);
+-            }
+-            catch
+-            {
+-                return;
+-            }
++		private void Explore(string directory)
++		{
++			if (_quit)
++				return;
+ 
+-            foreach (string strFile in strFileList)
+-            {
+-                if (_quit)
+-                    return;
++			string[] strDirList;
++			string[] strFileList;
+ 
+-                string strExtention = Path.GetExtension(strFile).ToLower();
+-                if (strExtention.Length == 0)
+-                    continue;
+-                ArrayList arPluginList = m_fileFunctionMap.Get(strExtention);
+-                if (arPluginList == null)
+-                    continue;
++			try
++			{
++				strDirList = Directory.GetDirectories(directory);
++				strFileList = Directory.GetFiles(directory);
++			}
++			catch
++			{
++				return;
++			}
+ 
+-                foreach (IPlugin plugin in arPluginList)
+-                {
+-                    try
+-                    {
+-                        SearchInfo sInfo = plugin.ProcessFile(strFile);
+-                        if (sInfo != null)
+-                        {
+-                            m_indexer.AddDocument(sInfo);
+-                            OnIndexProgress(++m_iNumDocsDone);
+-                        }
+-                    }
+-                    catch (Exception e)
+-                    {
+-                        Logger.Instance.LogException(e);
+-                    }
+-                }
+-            }
+-            foreach (string strDir in strDirList)
+-            {
+-                if (_quit)
+-                    return;
+-                try
+-                {
+-                    Explore(strDir);
+-                }
+-                catch (Exception e) // Out of stack exception?
+-                {
+-                    Logger.Instance.LogException(e);
+-                }
+-            }
+-        }
+-    }
++			foreach (string strFile in strFileList)
++			{
++				if (_quit)
++					return;
++
++				string strExtention = Path.GetExtension(strFile).ToLower();
++				if (strExtention.Length == 0)
++					continue;
++				ArrayList arPluginList = m_fileFunctionMap.Get(strExtention);
++				if (arPluginList == null)
++					continue;
++
++				foreach (IPlugin plugin in arPluginList)
++				{
++					try
++					{
++						SearchInfo sInfo = plugin.ProcessFile(strFile);
++						if (sInfo != null)
++						{
++							m_indexer.AddDocument(sInfo);
++							OnIndexProgress(++m_iNumDocsDone);
++						}
++					}
++					catch (Exception e)
++					{
++						Logger.Instance.LogException(e);
++					}
++				}
++			}
++			foreach (string strDir in strDirList)
++			{
++				if (_quit)
++					return;
++				try
++				{
++					Explore(strDir);
++				}
++				catch (Exception e) // Out of stack exception?
++				{
++					Logger.Instance.LogException(e);
++				}
++			}
++		}
++	}
+ }
+
+Deleted: trunk/OpenDesktop/yammy.ICO
+===================================================================
+(Binary files differ)
+
+Modified: trunk/WebRoot/style.css
+===================================================================
+--- trunk/WebRoot/style.css	2006-01-08 10:50:20 UTC (rev 8)
++++ trunk/WebRoot/style.css	2006-01-09 17:38:28 UTC (rev 9)
+@@ -104,4 +104,35 @@
+ .buzz {
+ 	color:#800;
+ 	font-weight:bold;
++}
++
++.setup {
++	margin:20px auto;
++	font-size:12pt;
++	font-family:Bookman Old Style, serif;
++	width:400px;
++	line-height:150%;
++	text-align:left;
++	background:#fee;
++	padding:10px;
++	border:1px solid #fdd;
++}
++
++.setup input {
++	border-style:none;
++	background:#ffe;
++	padding:4px;
++	text-decoration:none;
++	color:#000;
++}
++
++.setup-button a {
++	border:1px solid #ddf;
++	background:#eef;
++	padding:4px;
++	text-decoration:none;
++	color:#000;
++}
++.setup-button a:hover {
++	background:#fff;
+ }
+\ No newline at end of file
+
+
+</PRE>
+
+<!--endarticle-->
+    <HR>
+    <P><UL>
+        <!--threads-->
+	<LI>Previous message: <A HREF="000003.html">[Opendesktop-svn] r7 - trunk/OpenDesktop
+</A></li>
+	<LI>Next message: <A HREF="000005.html">[Opendesktop-svn] r10 - in trunk: . IPlugin
+</A></li>
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#4">[ date ]</a>
+              <a href="thread.html#4">[ thread ]</a>
+              <a href="subject.html#4">[ subject ]</a>
+              <a href="author.html#4">[ author ]</a>
+         </LI>
+       </UL>
+
+<hr>
+<a href="https://lists.berlios.de/mailman/listinfo/opendesktop-svn">More information about the Opendesktop-svn
+mailing list</a><br>
+</body></html>

@@ -1,0 +1,622 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<HTML>
+ <HEAD>
+   <TITLE> [Opendesktop-svn] r5 - in trunk: ODIPlugin/Properties OpenDesktop OpenDesktop/Properties YammyPlugin
+   </TITLE>
+   <LINK REL="Index" HREF="http://lists.berlios.de/pipermail/opendesktop-svn/2006-January/index.html" >
+   <LINK REL="made" HREF="mailto:opendesktop-svn%40lists.berlios.de?Subject=Re%3A%20%5BOpendesktop-svn%5D%20r5%20-%20in%20trunk%3A%20ODIPlugin/Properties%20OpenDesktop%20OpenDesktop/Properties%20YammyPlugin&In-Reply-To=%3C200601030348.k033mYw6023390%40sheep.berlios.de%3E">
+   <META NAME="robots" CONTENT="index,nofollow">
+   <style type="text/css">
+       pre {
+           white-space: pre-wrap;       /* css-2.1, curent FF, Opera, Safari */
+           }
+   </style>
+   <META http-equiv="Content-Type" content="text/html; charset=us-ascii">
+   
+   <LINK REL="Next"  HREF="000002.html">
+ </HEAD>
+ <BODY BGCOLOR="#ffffff">
+   <H1>[Opendesktop-svn] r5 - in trunk: ODIPlugin/Properties OpenDesktop OpenDesktop/Properties YammyPlugin</H1>
+    <B>pravin at BerliOS</B> 
+    <A HREF="mailto:opendesktop-svn%40lists.berlios.de?Subject=Re%3A%20%5BOpendesktop-svn%5D%20r5%20-%20in%20trunk%3A%20ODIPlugin/Properties%20OpenDesktop%20OpenDesktop/Properties%20YammyPlugin&In-Reply-To=%3C200601030348.k033mYw6023390%40sheep.berlios.de%3E"
+       TITLE="[Opendesktop-svn] r5 - in trunk: ODIPlugin/Properties OpenDesktop OpenDesktop/Properties YammyPlugin">pravin at berlios.de
+       </A><BR>
+    <I>Tue Jan  3 04:48:34 CET 2006</I>
+    <P><UL>
+        
+        <LI>Next message: <A HREF="000002.html">[Opendesktop-svn] r6 - in trunk: ODIPlugin OpenDesktop WebRoot YammyPlugin
+</A></li>
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#1">[ date ]</a>
+              <a href="thread.html#1">[ thread ]</a>
+              <a href="subject.html#1">[ subject ]</a>
+              <a href="author.html#1">[ author ]</a>
+         </LI>
+       </UL>
+    <HR>  
+<!--beginarticle-->
+<PRE>Author: pravin
+Date: 2006-01-03 04:48:32 +0100 (Tue, 03 Jan 2006)
+New Revision: 5
+
+Added:
+   trunk/OpenDesktop/Synchronizer.cs
+Modified:
+   trunk/ODIPlugin/Properties/AssemblyInfo.cs
+   trunk/OpenDesktop/FileExplorer.cs
+   trunk/OpenDesktop/Indexer.cs
+   trunk/OpenDesktop/OpenDesktop.csproj
+   trunk/OpenDesktop/Program.cs
+   trunk/OpenDesktop/Properties/Settings.Designer.cs
+   trunk/OpenDesktop/Properties/Settings.settings
+   trunk/OpenDesktop/ReplaceTag.cs
+   trunk/OpenDesktop/WebServer.cs
+   trunk/OpenDesktop/app.config
+   trunk/YammyPlugin/Decoder.cs
+   trunk/YammyPlugin/YammyPlugin.cs
+Log:
+- SendResponse and SendErrorResponse now close the sockets and set them to null.
+- FileExplorer creates index in another location and copies it to the correct location after its done.
+- Synchronizer class created for handling all kinds of sync. Currently, it is used for locking search access to the index while FileExplorer is replacing the old index with the new one.
+
+Modified: trunk/ODIPlugin/Properties/AssemblyInfo.cs
+===================================================================
+--- trunk/ODIPlugin/Properties/AssemblyInfo.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/ODIPlugin/Properties/AssemblyInfo.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -8,9 +8,9 @@
+ [assembly: AssemblyTitle(&quot;ODSPluginInterface&quot;)]
+ [assembly: AssemblyDescription(&quot;&quot;)]
+ [assembly: AssemblyConfiguration(&quot;&quot;)]
+-[assembly: AssemblyCompany(&quot;Personal&quot;)]
++[assembly: AssemblyCompany(&quot;Pravin Paratey&quot;)]
+ [assembly: AssemblyProduct(&quot;ODSPluginInterface&quot;)]
+-[assembly: AssemblyCopyright(&quot;Copyright &#169; Personal 2005&quot;)]
++[assembly: AssemblyCopyright(&quot;Copyright &#169; Pravin Paratey 2005&quot;)]
+ [assembly: AssemblyTrademark(&quot;&quot;)]
+ [assembly: AssemblyCulture(&quot;&quot;)]
+ 
+
+Modified: trunk/OpenDesktop/FileExplorer.cs
+===================================================================
+--- trunk/OpenDesktop/FileExplorer.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/FileExplorer.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -41,7 +41,7 @@
+             m_fileFunctionMap = fileFunctionMap;
+             _quit = false;
+             //TODO: m_htDNV = 
+-            m_indexer = new Indexer(OpenDesktop.Properties.Settings.Default.IndexPath, IndexMode.CREATE);
++            m_indexer = new Indexer(Properties.Settings.Default.NewIndexPath, IndexMode.CREATE);
+         }
+ 
+         public void Dispose()
+@@ -50,13 +50,24 @@
+             {
+                 m_objThread.Abort();
+             }
+-            m_indexer.Close();
++            if (m_indexer != null)
++            {
++                m_indexer.Close();
++            }
+         }
+         #endregion
+ 
+         #region Run/Stop/Pause/Resume
+         public void Run()
+         {
++            // Check if an update of the index is due
++            TimeSpan objUpdateFrequency = new TimeSpan(Properties.Settings.Default.IndexUpdateFrequency, 0, 0);
++            if (DateTime.Now.Subtract(Properties.Settings.Default.IndexLastUpdated) &lt; objUpdateFrequency)
++            {
++                Logger.Instance.LogDebug(&quot;Update time not elapsed. Exiting FileExplorer&quot;);
++                return;
++            }
++
+             m_objThread = new Thread(new ThreadStart(Explore));
+             m_objThread.Priority = ThreadPriority.Lowest;
+             m_objThread.Name = &quot;FileExplorer&quot;;
+@@ -66,13 +77,13 @@
+             }
+             catch (Exception e)
+             {
+-                // TODO: log exception (can be out of stack exception)
++                Logger.Instance.LogException(e);
+             }
+         }
+ 
+         public void Pause()
+         {
+-            if (m_objThread.ThreadState == ThreadState.Running)
++            if (m_objThread != null &amp;&amp; m_objThread.ThreadState == ThreadState.Running)
+             {
+                 m_objThread.Suspend();
+             }
+@@ -80,7 +91,7 @@
+ 
+         public void Resume()
+         {
+-            if (m_objThread.ThreadState == ThreadState.Suspended)
++            if (m_objThread != null &amp;&amp; m_objThread.ThreadState == ThreadState.Suspended)
+             {
+                 m_objThread.Resume();
+             }
+@@ -103,6 +114,20 @@
+                     Explore(strDrive);
+                 }
+             }
++            
++            if (!_quit) // If the exit was natural
++            {
++                // Close index and move it 
++                m_indexer.Close(); m_indexer = null;
++                Synchronizer.Instance.LockIndex();
++                Directory.Delete(Properties.Settings.Default.IndexPath, true);
++                Directory.Move(Properties.Settings.Default.NewIndexPath, 
++                    Properties.Settings.Default.IndexPath);
++                Synchronizer.Instance.ReleaseIndex();
++
++                Properties.Settings.Default.IndexLastUpdated = DateTime.Now;
++                Properties.Settings.Default.Save();
++            }
+         }
+ 
+         private void Explore(string directory)
+@@ -161,7 +186,7 @@
+                 }
+                 catch (Exception e) // Out of stack exception?
+                 {
+-                    // TODO: log exception
++                    Logger.Instance.LogException(e);
+                 }
+             }
+         }
+
+Modified: trunk/OpenDesktop/Indexer.cs
+===================================================================
+--- trunk/OpenDesktop/Indexer.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/Indexer.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -62,6 +62,7 @@
+                 catch (Exception e)
+                 {
+                     Logger.Instance.LogException(e);
++                    m_bSucess = false;
+                 }
+             }
+             else if (mode == IndexMode.SEARCH)
+@@ -74,6 +75,7 @@
+                 catch (Exception e)
+                 {
+                     Logger.Instance.LogException(e);
++                    m_bSucess = false;
+                 }
+             }
+         }
+
+Modified: trunk/OpenDesktop/OpenDesktop.csproj
+===================================================================
+--- trunk/OpenDesktop/OpenDesktop.csproj	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/OpenDesktop.csproj	2006-01-03 03:48:32 UTC (rev 5)
+@@ -71,6 +71,7 @@
+       &lt;DesignTimeSharedInput&gt;True&lt;/DesignTimeSharedInput&gt;
+     &lt;/Compile&gt;
+     &lt;Compile Include=&quot;ReplaceTag.cs&quot; /&gt;
++    &lt;Compile Include=&quot;Synchronizer.cs&quot; /&gt;
+     &lt;Compile Include=&quot;TrayIcon.cs&quot; /&gt;
+     &lt;Compile Include=&quot;WebServer.cs&quot; /&gt;
+   &lt;/ItemGroup&gt;
+@@ -93,8 +94,8 @@
+   &lt;/Target&gt;
+   --&gt;
+   &lt;PropertyGroup&gt;
+-    &lt;PostBuildEvent&gt;
+-    &lt;/PostBuildEvent&gt;
++    &lt;PostBuildEvent&gt;mkdir &quot;$(TargetDir)\WebRoot&quot;
++copy &quot;$(SolutionDir)\WebRoot\*.*&quot; &quot;$(TargetDir)\WebRoot&quot;&lt;/PostBuildEvent&gt;
+     &lt;PreBuildEvent&gt;
+     &lt;/PreBuildEvent&gt;
+   &lt;/PropertyGroup&gt;
+
+Modified: trunk/OpenDesktop/Program.cs
+===================================================================
+--- trunk/OpenDesktop/Program.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/Program.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -29,11 +29,15 @@
+         [STAThread]
+         static void Main()
+         {
++            Logger LOG = Logger.Instance;
++            LOG.LogDebug(&quot;Starting OpenDesktop&quot;);
+             if (AppIsRunning())
+             {
+                 return;
+             }
++            LOG.LogDebug(&quot;Bringing up Webserver&quot;);
+             WebServer.Instance.Start();
++            LOG.LogDebug(&quot;Displaying NotifyIcon&quot;);
+             TrayIcon trayIcon = new TrayIcon();
+             MessageBox.Show(WebServer.Instance.LocalAddress);
+             FileExplorer fileExplorer = new FileExplorer(PluginManager.Instance.RegisteredFileExtensions);
+@@ -43,6 +47,7 @@
+ 
+             fileExplorer.Stop();
+             WebServer.Instance.Stop();
++            LOG.LogDebug(&quot;Exiting OpenDesktop&quot;);
+             Logger.Instance.Dispose();
+         }
+ 
+
+Modified: trunk/OpenDesktop/Properties/Settings.Designer.cs
+===================================================================
+--- trunk/OpenDesktop/Properties/Settings.Designer.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/Properties/Settings.Designer.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -34,5 +34,41 @@
+                 this[&quot;IndexPath&quot;] = value;
+             }
+         }
++        
++        [global::System.Configuration.UserScopedSettingAttribute()]
++        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
++        [global::System.Configuration.DefaultSettingValueAttribute(&quot;C:\\test1&quot;)]
++        public string NewIndexPath {
++            get {
++                return ((string)(this[&quot;NewIndexPath&quot;]));
++            }
++            set {
++                this[&quot;NewIndexPath&quot;] = value;
++            }
++        }
++        
++        [global::System.Configuration.UserScopedSettingAttribute()]
++        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
++        [global::System.Configuration.DefaultSettingValueAttribute(&quot;2006-01-01&quot;)]
++        public global::System.DateTime IndexLastUpdated {
++            get {
++                return ((global::System.DateTime)(this[&quot;IndexLastUpdated&quot;]));
++            }
++            set {
++                this[&quot;IndexLastUpdated&quot;] = value;
++            }
++        }
++        
++        [global::System.Configuration.UserScopedSettingAttribute()]
++        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
++        [global::System.Configuration.DefaultSettingValueAttribute(&quot;24&quot;)]
++        public int IndexUpdateFrequency {
++            get {
++                return ((int)(this[&quot;IndexUpdateFrequency&quot;]));
++            }
++            set {
++                this[&quot;IndexUpdateFrequency&quot;] = value;
++            }
++        }
+     }
+ }
+
+Modified: trunk/OpenDesktop/Properties/Settings.settings
+===================================================================
+--- trunk/OpenDesktop/Properties/Settings.settings	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/Properties/Settings.settings	2006-01-03 03:48:32 UTC (rev 5)
+@@ -5,5 +5,14 @@
+     &lt;Setting Name=&quot;IndexPath&quot; Type=&quot;System.String&quot; Scope=&quot;User&quot;&gt;
+       &lt;Value Profile=&quot;(Default)&quot;&gt;C:\test&lt;/Value&gt;
+     &lt;/Setting&gt;
++    &lt;Setting Name=&quot;NewIndexPath&quot; Type=&quot;System.String&quot; Scope=&quot;User&quot;&gt;
++      &lt;Value Profile=&quot;(Default)&quot;&gt;C:\test1&lt;/Value&gt;
++    &lt;/Setting&gt;
++    &lt;Setting Name=&quot;IndexLastUpdated&quot; Type=&quot;System.DateTime&quot; Scope=&quot;User&quot;&gt;
++      &lt;Value Profile=&quot;(Default)&quot;&gt;2006-01-01&lt;/Value&gt;
++    &lt;/Setting&gt;
++    &lt;Setting Name=&quot;IndexUpdateFrequency&quot; Type=&quot;System.Int32&quot; Scope=&quot;User&quot;&gt;
++      &lt;Value Profile=&quot;(Default)&quot;&gt;24&lt;/Value&gt;
++    &lt;/Setting&gt;
+   &lt;/Settings&gt;
+ &lt;/SettingsFile&gt;
+\ No newline at end of file
+
+Modified: trunk/OpenDesktop/ReplaceTag.cs
+===================================================================
+--- trunk/OpenDesktop/ReplaceTag.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/ReplaceTag.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -54,11 +54,18 @@
+             {
+                 StringBuilder sb = new StringBuilder();
+                 string strSearchTerm = m_queryString[&quot;search&quot;];
++                
++                // If index is being moved by FileExplorer, wait till the move operation is complete
++                while (Synchronizer.Instance.IndexIsLocked)
++                {
++                    System.Threading.Thread.Sleep(500);
++                }
++                
+                 Indexer m_indexer = new Indexer(OpenDesktop.Properties.Settings.Default.IndexPath, IndexMode.SEARCH);
+                 SearchInfo [] sinfo = m_indexer.Search(strSearchTerm);
+                 for (int i = 0; i &lt; sinfo.Length; i++)
+                 {
+-                    string strDisplayText = GetRelevantText(sinfo[i].Text, strSearchTerm);
++                    string strDisplayText = GetExcerpt(sinfo[i].Text, strSearchTerm);
+                     sb.Append(&quot;&lt;li&gt;&lt;a href=\&quot;&quot; + sinfo[i].Launcher + &quot;\&quot;&gt;&quot; + sinfo[i].Title +
+                         &quot;&lt;/a&gt;&lt;br /&gt;&quot; + strDisplayText + &quot;&lt;/li&gt;&quot;);
+                 }
+@@ -82,7 +89,7 @@
+         /// &lt;param name=&quot;text&quot;&gt;The text gotten from the index&lt;/param&gt;
+         /// &lt;param name=&quot;searchTerm&quot;&gt;&lt;/param&gt;
+         /// &lt;returns&gt;small paragraph of text&lt;/returns&gt;
+-        string GetRelevantText(string text, string searchTerm)
++        string GetExcerpt(string text, string searchTerm)
+         {
+             const int textWindow = 100;
+             string[] searchTerms = searchTerm.Split('+');
+
+Added: trunk/OpenDesktop/Synchronizer.cs
+===================================================================
+--- trunk/OpenDesktop/Synchronizer.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/Synchronizer.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -0,0 +1,79 @@
++using System;
++using System.Collections.Generic;
++using System.Text;
++
++namespace OpenDesktop
++{
++    /// &lt;summary&gt;
++    /// This will be a common class to synchronize events like
++    /// 1. Obtaining a lock before moving a index-dir and releasing it after done.
++    /// &lt;/summary&gt;
++    class Synchronizer
++    {
++        #region Member Vars
++        private static Synchronizer _instance;
++        private static object m_lock = new object();
++        private object m_indexerLock;
++        private bool m_bIndexLocked = false;
++        #endregion
++
++        #region Constructor
++        private Synchronizer()
++        {
++            m_indexerLock = new object();
++        }
++        #endregion
++
++        #region Standard Singletone Implementation
++        public static Synchronizer Instance
++        {
++            get
++            {
++                if (_instance == null)
++                {
++                    lock (m_lock)
++                    {
++                        if (_instance == null)
++                        {
++                            _instance = new Synchronizer();
++                        }
++                    }
++                }
++                return _instance;
++            }
++        }
++        #endregion
++
++        #region Index Synchronization
++        /// &lt;summary&gt;
++        /// Lock the index to tell everybody that index is going to change
++        /// &lt;/summary&gt;
++        public void LockIndex()
++        {
++            lock (m_indexerLock)
++            {
++                m_bIndexLocked = true;
++            }
++        }
++
++        /// &lt;summary&gt;
++        /// Release the lock
++        /// &lt;/summary&gt;
++        public void ReleaseIndex()
++        {
++            lock (m_indexerLock)
++            {
++                m_bIndexLocked = false;
++            }
++        }
++
++        /// &lt;summary&gt;
++        /// Gets the lock state of the index
++        /// &lt;/summary&gt;
++        public bool IndexIsLocked
++        {
++            get { return m_bIndexLocked; }
++        }
++        #endregion
++    }
++}
+
+Modified: trunk/OpenDesktop/WebServer.cs
+===================================================================
+--- trunk/OpenDesktop/WebServer.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/WebServer.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -223,7 +223,7 @@
+             if (uriRequest == null)
+             {
+                 Logger.Instance.LogDebug(&quot;Invalid Request&quot; + strRequest);
+-                SendErrorResponse(sock, HttpResponseCode.InvalidRequest, &quot;Invalid request:\r\n&quot; + strRequest);
++                SendErrorResponse(ref sock, HttpResponseCode.InvalidRequest, &quot;Invalid request:\r\n&quot; + strRequest);
+                 return;
+             }
+ 
+@@ -242,7 +242,7 @@
+ 
+             if (!File.Exists(strFilePath))
+             {
+-                SendErrorResponse(sock, HttpResponseCode.FileNotFound, Resources.FileNotFound);
++                SendErrorResponse(ref sock, HttpResponseCode.FileNotFound, Resources.FileNotFound);
+                 return;
+             }
+ 
+@@ -263,7 +263,7 @@
+                     reader.Close();
+                     reader = null;
+                 }
+-                SendErrorResponse(sock, HttpResponseCode.Conflict, e.ToString());
++                SendErrorResponse(ref sock, HttpResponseCode.Conflict, e.ToString());
+                 return;
+             }
+             string strContentType;
+@@ -298,14 +298,11 @@
+             }
+             else
+             {
+-                SendErrorResponse(sock, HttpResponseCode.Unsupported, &quot;Unsupported mime type requested&quot;);
++                SendErrorResponse(ref sock, HttpResponseCode.Unsupported, &quot;Unsupported mime type requested&quot;);
+                 return;
+             }
+ 
+-            SendResponse(sock, responseData, strContentType, responseData.Length);
+-            sock.Shutdown(SocketShutdown.Both);
+-            Logger.Instance.LogDebug(&quot;Done Processing: &quot; + uriRequest.ToString());
+-            sock.Close();
++            SendResponse(ref sock, responseData, strContentType, responseData.Length);
+         }
+ 
+         /// &lt;summary&gt;
+@@ -327,14 +324,27 @@
+             return strHeader;
+         }
+ 
+-        void SendResponse(Socket sock, byte[] content, string contentType, int contentLength)
++        void SendResponse(ref Socket sock, byte[] content, string contentType, int contentLength)
+         {
+             string strHeader = CreateHeader(HttpResponseCode.Ok, contentType, contentLength);
+             sock.Send(Encoding.ASCII.GetBytes(strHeader));
+             sock.Send(content, contentLength, SocketFlags.None);
++            // FIXME: The sleep has been added so that the data reaches the browser before
++            // we shutdown the socket. What is strange is Send is a sync call and so the
++            // control should sock.Shutdown only after the Send sends data to the browser
++            // But this is not what happens. Hence this Sleep hack.
++            Thread.Sleep(100);
++            sock.Shutdown(SocketShutdown.Both);
++            sock.Close(); sock = null;
+         }
+ 
+-        void SendErrorResponse(Socket sock, HttpResponseCode status, string errMessage)
++        /// &lt;summary&gt;
++        /// Sends an error response on the socket. Also closes the socket
++        /// &lt;/summary&gt;
++        /// &lt;param name=&quot;sock&quot;&gt;socket to send response to&lt;/param&gt;
++        /// &lt;param name=&quot;status&quot;&gt;Error Code&lt;/param&gt;
++        /// &lt;param name=&quot;errMessage&quot;&gt;Message&lt;/param&gt;
++        void SendErrorResponse(ref Socket sock, HttpResponseCode status, string errMessage)
+         {
+             StreamReader reader;
+             string strErrorPage;
+@@ -354,8 +364,11 @@
+ 
+             byte [] outbuf = Encoding.UTF8.GetBytes(strErrorPage);
+             string strHeader = CreateHeader(status, &quot;text/html;charset=utf-8&quot;, outbuf.Length);
++            // Header is always in ASCII encoding
+             sock.Send(Encoding.ASCII.GetBytes(strHeader));
+             sock.Send(outbuf, outbuf.Length, SocketFlags.None);
++            sock.Shutdown(SocketShutdown.Both);
++            sock.Close(); sock = null;
+         }
+ 
+         NameValueCollection MakeQueryString(string queryString)
+
+Modified: trunk/OpenDesktop/app.config
+===================================================================
+--- trunk/OpenDesktop/app.config	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/app.config	2006-01-03 03:48:32 UTC (rev 5)
+@@ -10,6 +10,15 @@
+             &lt;setting name=&quot;IndexPath&quot; serializeAs=&quot;String&quot;&gt;
+                 &lt;value&gt;C:\test&lt;/value&gt;
+             &lt;/setting&gt;
++            &lt;setting name=&quot;NewIndexPath&quot; serializeAs=&quot;String&quot;&gt;
++                &lt;value&gt;C:\test1&lt;/value&gt;
++            &lt;/setting&gt;
++            &lt;setting name=&quot;IndexLastUpdated&quot; serializeAs=&quot;String&quot;&gt;
++                &lt;value&gt;2006-01-01&lt;/value&gt;
++            &lt;/setting&gt;
++            &lt;setting name=&quot;IndexUpdateFrequency&quot; serializeAs=&quot;String&quot;&gt;
++                &lt;value&gt;24&lt;/value&gt;
++            &lt;/setting&gt;
+         &lt;/OpenDesktop.Properties.Settings&gt;
+     &lt;/userSettings&gt;
+ &lt;/configuration&gt;
+\ No newline at end of file
+
+Modified: trunk/YammyPlugin/Decoder.cs
+===================================================================
+--- trunk/YammyPlugin/Decoder.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/YammyPlugin/Decoder.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -224,7 +224,7 @@
+         {
+             string date = MakeDTFromCTime(timeStamp).ToLongDateString();
+ 
+-            sb.Append(&quot;&lt;div class=\&quot;convo\&quot;&gt;&quot;);
++            sb.Append(&quot;&lt;div class=\&quot;convo-started\&quot;&gt;&quot;);
+             sb.AppendFormat(Resources.ConversationStarted, date);
+             sb.Append(&quot;&lt;/div&gt;&quot;);
+         }
+@@ -243,7 +243,7 @@
+             string strTag = m.Groups[1].Value;
+             if (strTag.Equals(&quot;ding&quot;))
+             {
+-                return @&quot;&lt;span class=&quot;&quot;ding&quot;&quot;&gt;Buzz!&lt;/span&gt;&quot;;
++                return @&quot;&lt;span class=&quot;&quot;buzz&quot;&quot;&gt;Buzz!&lt;/span&gt;&quot;;
+             }
+             else
+             {
+
+Modified: trunk/YammyPlugin/YammyPlugin.cs
+===================================================================
+--- trunk/YammyPlugin/YammyPlugin.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/YammyPlugin/YammyPlugin.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -73,6 +73,11 @@
+             }
+         }
+ 
++        /// &lt;summary&gt;
++        /// Decodes the file and returns a SearchInfo object for indexing
++        /// &lt;/summary&gt;
++        /// &lt;param name=&quot;filePath&quot;&gt;&lt;/param&gt;
++        /// &lt;returns&gt;&lt;/returns&gt;
+         public SearchInfo ProcessFile(string filePath)
+         {
+             SearchInfo indexvars = null;
+@@ -80,11 +85,10 @@
+             {
+                 if (filePath.Contains(&quot;Profiles&quot;) &amp;&amp; filePath.Contains(&quot;Messages&quot;))
+                 {
+-                    Console.Out.WriteLine(filePath);
+                     Decoder d = new Decoder(filePath);
+                     string strText = d.Decode(true);
+                     string strTitle = string.Format(Resources.IndexTitle, d.LocalID, d.RemoteID);
+-                    indexvars = new SearchInfo(strTitle, strText, &quot;display.html&quot;);
++                    indexvars = new SearchInfo(strTitle, strText, &quot;display.html?convo=&quot; + filePath);
+                 }
+             }
+             
+
+
+</PRE>
+
+<!--endarticle-->
+    <HR>
+    <P><UL>
+        <!--threads-->
+	
+	<LI>Next message: <A HREF="000002.html">[Opendesktop-svn] r6 - in trunk: ODIPlugin OpenDesktop WebRoot YammyPlugin
+</A></li>
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#1">[ date ]</a>
+              <a href="thread.html#1">[ thread ]</a>
+              <a href="subject.html#1">[ subject ]</a>
+              <a href="author.html#1">[ author ]</a>
+         </LI>
+       </UL>
+
+<hr>
+<a href="https://lists.berlios.de/mailman/listinfo/opendesktop-svn">More information about the Opendesktop-svn
+mailing list</a><br>
+</body></html>

@@ -1,0 +1,4506 @@
+From pravin at berlios.de  Tue Jan  3 04:48:34 2006
+From: pravin at berlios.de (pravin at BerliOS)
+Date: Tue, 3 Jan 2006 04:48:34 +0100
+Subject: [Opendesktop-svn] r5 - in trunk: ODIPlugin/Properties OpenDesktop OpenDesktop/Properties YammyPlugin
+Message-ID: <200601030348.k033mYw6023390@sheep.berlios.de>
+
+Author: pravin
+Date: 2006-01-03 04:48:32 +0100 (Tue, 03 Jan 2006)
+New Revision: 5
+
+Added:
+   trunk/OpenDesktop/Synchronizer.cs
+Modified:
+   trunk/ODIPlugin/Properties/AssemblyInfo.cs
+   trunk/OpenDesktop/FileExplorer.cs
+   trunk/OpenDesktop/Indexer.cs
+   trunk/OpenDesktop/OpenDesktop.csproj
+   trunk/OpenDesktop/Program.cs
+   trunk/OpenDesktop/Properties/Settings.Designer.cs
+   trunk/OpenDesktop/Properties/Settings.settings
+   trunk/OpenDesktop/ReplaceTag.cs
+   trunk/OpenDesktop/WebServer.cs
+   trunk/OpenDesktop/app.config
+   trunk/YammyPlugin/Decoder.cs
+   trunk/YammyPlugin/YammyPlugin.cs
+Log:
+- SendResponse and SendErrorResponse now close the sockets and set them to null.
+- FileExplorer creates index in another location and copies it to the correct location after its done.
+- Synchronizer class created for handling all kinds of sync. Currently, it is used for locking search access to the index while FileExplorer is replacing the old index with the new one.
+
+Modified: trunk/ODIPlugin/Properties/AssemblyInfo.cs
+===================================================================
+--- trunk/ODIPlugin/Properties/AssemblyInfo.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/ODIPlugin/Properties/AssemblyInfo.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -8,9 +8,9 @@
+ [assembly: AssemblyTitle("ODSPluginInterface")]
+ [assembly: AssemblyDescription("")]
+ [assembly: AssemblyConfiguration("")]
+-[assembly: AssemblyCompany("Personal")]
++[assembly: AssemblyCompany("Pravin Paratey")]
+ [assembly: AssemblyProduct("ODSPluginInterface")]
+-[assembly: AssemblyCopyright("Copyright ? Personal 2005")]
++[assembly: AssemblyCopyright("Copyright ? Pravin Paratey 2005")]
+ [assembly: AssemblyTrademark("")]
+ [assembly: AssemblyCulture("")]
+ 
+
+Modified: trunk/OpenDesktop/FileExplorer.cs
+===================================================================
+--- trunk/OpenDesktop/FileExplorer.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/FileExplorer.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -41,7 +41,7 @@
+             m_fileFunctionMap = fileFunctionMap;
+             _quit = false;
+             //TODO: m_htDNV = 
+-            m_indexer = new Indexer(OpenDesktop.Properties.Settings.Default.IndexPath, IndexMode.CREATE);
++            m_indexer = new Indexer(Properties.Settings.Default.NewIndexPath, IndexMode.CREATE);
+         }
+ 
+         public void Dispose()
+@@ -50,13 +50,24 @@
+             {
+                 m_objThread.Abort();
+             }
+-            m_indexer.Close();
++            if (m_indexer != null)
++            {
++                m_indexer.Close();
++            }
+         }
+         #endregion
+ 
+         #region Run/Stop/Pause/Resume
+         public void Run()
+         {
++            // Check if an update of the index is due
++            TimeSpan objUpdateFrequency = new TimeSpan(Properties.Settings.Default.IndexUpdateFrequency, 0, 0);
++            if (DateTime.Now.Subtract(Properties.Settings.Default.IndexLastUpdated) < objUpdateFrequency)
++            {
++                Logger.Instance.LogDebug("Update time not elapsed. Exiting FileExplorer");
++                return;
++            }
++
+             m_objThread = new Thread(new ThreadStart(Explore));
+             m_objThread.Priority = ThreadPriority.Lowest;
+             m_objThread.Name = "FileExplorer";
+@@ -66,13 +77,13 @@
+             }
+             catch (Exception e)
+             {
+-                // TODO: log exception (can be out of stack exception)
++                Logger.Instance.LogException(e);
+             }
+         }
+ 
+         public void Pause()
+         {
+-            if (m_objThread.ThreadState == ThreadState.Running)
++            if (m_objThread != null && m_objThread.ThreadState == ThreadState.Running)
+             {
+                 m_objThread.Suspend();
+             }
+@@ -80,7 +91,7 @@
+ 
+         public void Resume()
+         {
+-            if (m_objThread.ThreadState == ThreadState.Suspended)
++            if (m_objThread != null && m_objThread.ThreadState == ThreadState.Suspended)
+             {
+                 m_objThread.Resume();
+             }
+@@ -103,6 +114,20 @@
+                     Explore(strDrive);
+                 }
+             }
++            
++            if (!_quit) // If the exit was natural
++            {
++                // Close index and move it 
++                m_indexer.Close(); m_indexer = null;
++                Synchronizer.Instance.LockIndex();
++                Directory.Delete(Properties.Settings.Default.IndexPath, true);
++                Directory.Move(Properties.Settings.Default.NewIndexPath, 
++                    Properties.Settings.Default.IndexPath);
++                Synchronizer.Instance.ReleaseIndex();
++
++                Properties.Settings.Default.IndexLastUpdated = DateTime.Now;
++                Properties.Settings.Default.Save();
++            }
+         }
+ 
+         private void Explore(string directory)
+@@ -161,7 +186,7 @@
+                 }
+                 catch (Exception e) // Out of stack exception?
+                 {
+-                    // TODO: log exception
++                    Logger.Instance.LogException(e);
+                 }
+             }
+         }
+
+Modified: trunk/OpenDesktop/Indexer.cs
+===================================================================
+--- trunk/OpenDesktop/Indexer.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/Indexer.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -62,6 +62,7 @@
+                 catch (Exception e)
+                 {
+                     Logger.Instance.LogException(e);
++                    m_bSucess = false;
+                 }
+             }
+             else if (mode == IndexMode.SEARCH)
+@@ -74,6 +75,7 @@
+                 catch (Exception e)
+                 {
+                     Logger.Instance.LogException(e);
++                    m_bSucess = false;
+                 }
+             }
+         }
+
+Modified: trunk/OpenDesktop/OpenDesktop.csproj
+===================================================================
+--- trunk/OpenDesktop/OpenDesktop.csproj	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/OpenDesktop.csproj	2006-01-03 03:48:32 UTC (rev 5)
+@@ -71,6 +71,7 @@
+       <DesignTimeSharedInput>True</DesignTimeSharedInput>
+     </Compile>
+     <Compile Include="ReplaceTag.cs" />
++    <Compile Include="Synchronizer.cs" />
+     <Compile Include="TrayIcon.cs" />
+     <Compile Include="WebServer.cs" />
+   </ItemGroup>
+@@ -93,8 +94,8 @@
+   </Target>
+   -->
+   <PropertyGroup>
+-    <PostBuildEvent>
+-    </PostBuildEvent>
++    <PostBuildEvent>mkdir "$(TargetDir)\WebRoot"
++copy "$(SolutionDir)\WebRoot\*.*" "$(TargetDir)\WebRoot"</PostBuildEvent>
+     <PreBuildEvent>
+     </PreBuildEvent>
+   </PropertyGroup>
+
+Modified: trunk/OpenDesktop/Program.cs
+===================================================================
+--- trunk/OpenDesktop/Program.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/Program.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -29,11 +29,15 @@
+         [STAThread]
+         static void Main()
+         {
++            Logger LOG = Logger.Instance;
++            LOG.LogDebug("Starting OpenDesktop");
+             if (AppIsRunning())
+             {
+                 return;
+             }
++            LOG.LogDebug("Bringing up Webserver");
+             WebServer.Instance.Start();
++            LOG.LogDebug("Displaying NotifyIcon");
+             TrayIcon trayIcon = new TrayIcon();
+             MessageBox.Show(WebServer.Instance.LocalAddress);
+             FileExplorer fileExplorer = new FileExplorer(PluginManager.Instance.RegisteredFileExtensions);
+@@ -43,6 +47,7 @@
+ 
+             fileExplorer.Stop();
+             WebServer.Instance.Stop();
++            LOG.LogDebug("Exiting OpenDesktop");
+             Logger.Instance.Dispose();
+         }
+ 
+
+Modified: trunk/OpenDesktop/Properties/Settings.Designer.cs
+===================================================================
+--- trunk/OpenDesktop/Properties/Settings.Designer.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/Properties/Settings.Designer.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -34,5 +34,41 @@
+                 this["IndexPath"] = value;
+             }
+         }
++        
++        [global::System.Configuration.UserScopedSettingAttribute()]
++        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
++        [global::System.Configuration.DefaultSettingValueAttribute("C:\\test1")]
++        public string NewIndexPath {
++            get {
++                return ((string)(this["NewIndexPath"]));
++            }
++            set {
++                this["NewIndexPath"] = value;
++            }
++        }
++        
++        [global::System.Configuration.UserScopedSettingAttribute()]
++        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
++        [global::System.Configuration.DefaultSettingValueAttribute("2006-01-01")]
++        public global::System.DateTime IndexLastUpdated {
++            get {
++                return ((global::System.DateTime)(this["IndexLastUpdated"]));
++            }
++            set {
++                this["IndexLastUpdated"] = value;
++            }
++        }
++        
++        [global::System.Configuration.UserScopedSettingAttribute()]
++        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
++        [global::System.Configuration.DefaultSettingValueAttribute("24")]
++        public int IndexUpdateFrequency {
++            get {
++                return ((int)(this["IndexUpdateFrequency"]));
++            }
++            set {
++                this["IndexUpdateFrequency"] = value;
++            }
++        }
+     }
+ }
+
+Modified: trunk/OpenDesktop/Properties/Settings.settings
+===================================================================
+--- trunk/OpenDesktop/Properties/Settings.settings	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/Properties/Settings.settings	2006-01-03 03:48:32 UTC (rev 5)
+@@ -5,5 +5,14 @@
+     <Setting Name="IndexPath" Type="System.String" Scope="User">
+       <Value Profile="(Default)">C:\test</Value>
+     </Setting>
++    <Setting Name="NewIndexPath" Type="System.String" Scope="User">
++      <Value Profile="(Default)">C:\test1</Value>
++    </Setting>
++    <Setting Name="IndexLastUpdated" Type="System.DateTime" Scope="User">
++      <Value Profile="(Default)">2006-01-01</Value>
++    </Setting>
++    <Setting Name="IndexUpdateFrequency" Type="System.Int32" Scope="User">
++      <Value Profile="(Default)">24</Value>
++    </Setting>
+   </Settings>
+ </SettingsFile>
+\ No newline at end of file
+
+Modified: trunk/OpenDesktop/ReplaceTag.cs
+===================================================================
+--- trunk/OpenDesktop/ReplaceTag.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/ReplaceTag.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -54,11 +54,18 @@
+             {
+                 StringBuilder sb = new StringBuilder();
+                 string strSearchTerm = m_queryString["search"];
++                
++                // If index is being moved by FileExplorer, wait till the move operation is complete
++                while (Synchronizer.Instance.IndexIsLocked)
++                {
++                    System.Threading.Thread.Sleep(500);
++                }
++                
+                 Indexer m_indexer = new Indexer(OpenDesktop.Properties.Settings.Default.IndexPath, IndexMode.SEARCH);
+                 SearchInfo [] sinfo = m_indexer.Search(strSearchTerm);
+                 for (int i = 0; i < sinfo.Length; i++)
+                 {
+-                    string strDisplayText = GetRelevantText(sinfo[i].Text, strSearchTerm);
++                    string strDisplayText = GetExcerpt(sinfo[i].Text, strSearchTerm);
+                     sb.Append("<li><a href=\"" + sinfo[i].Launcher + "\">" + sinfo[i].Title +
+                         "</a><br />" + strDisplayText + "</li>");
+                 }
+@@ -82,7 +89,7 @@
+         /// <param name="text">The text gotten from the index</param>
+         /// <param name="searchTerm"></param>
+         /// <returns>small paragraph of text</returns>
+-        string GetRelevantText(string text, string searchTerm)
++        string GetExcerpt(string text, string searchTerm)
+         {
+             const int textWindow = 100;
+             string[] searchTerms = searchTerm.Split('+');
+
+Added: trunk/OpenDesktop/Synchronizer.cs
+===================================================================
+--- trunk/OpenDesktop/Synchronizer.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/Synchronizer.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -0,0 +1,79 @@
++using System;
++using System.Collections.Generic;
++using System.Text;
++
++namespace OpenDesktop
++{
++    /// <summary>
++    /// This will be a common class to synchronize events like
++    /// 1. Obtaining a lock before moving a index-dir and releasing it after done.
++    /// </summary>
++    class Synchronizer
++    {
++        #region Member Vars
++        private static Synchronizer _instance;
++        private static object m_lock = new object();
++        private object m_indexerLock;
++        private bool m_bIndexLocked = false;
++        #endregion
++
++        #region Constructor
++        private Synchronizer()
++        {
++            m_indexerLock = new object();
++        }
++        #endregion
++
++        #region Standard Singletone Implementation
++        public static Synchronizer Instance
++        {
++            get
++            {
++                if (_instance == null)
++                {
++                    lock (m_lock)
++                    {
++                        if (_instance == null)
++                        {
++                            _instance = new Synchronizer();
++                        }
++                    }
++                }
++                return _instance;
++            }
++        }
++        #endregion
++
++        #region Index Synchronization
++        /// <summary>
++        /// Lock the index to tell everybody that index is going to change
++        /// </summary>
++        public void LockIndex()
++        {
++            lock (m_indexerLock)
++            {
++                m_bIndexLocked = true;
++            }
++        }
++
++        /// <summary>
++        /// Release the lock
++        /// </summary>
++        public void ReleaseIndex()
++        {
++            lock (m_indexerLock)
++            {
++                m_bIndexLocked = false;
++            }
++        }
++
++        /// <summary>
++        /// Gets the lock state of the index
++        /// </summary>
++        public bool IndexIsLocked
++        {
++            get { return m_bIndexLocked; }
++        }
++        #endregion
++    }
++}
+
+Modified: trunk/OpenDesktop/WebServer.cs
+===================================================================
+--- trunk/OpenDesktop/WebServer.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/WebServer.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -223,7 +223,7 @@
+             if (uriRequest == null)
+             {
+                 Logger.Instance.LogDebug("Invalid Request" + strRequest);
+-                SendErrorResponse(sock, HttpResponseCode.InvalidRequest, "Invalid request:\r\n" + strRequest);
++                SendErrorResponse(ref sock, HttpResponseCode.InvalidRequest, "Invalid request:\r\n" + strRequest);
+                 return;
+             }
+ 
+@@ -242,7 +242,7 @@
+ 
+             if (!File.Exists(strFilePath))
+             {
+-                SendErrorResponse(sock, HttpResponseCode.FileNotFound, Resources.FileNotFound);
++                SendErrorResponse(ref sock, HttpResponseCode.FileNotFound, Resources.FileNotFound);
+                 return;
+             }
+ 
+@@ -263,7 +263,7 @@
+                     reader.Close();
+                     reader = null;
+                 }
+-                SendErrorResponse(sock, HttpResponseCode.Conflict, e.ToString());
++                SendErrorResponse(ref sock, HttpResponseCode.Conflict, e.ToString());
+                 return;
+             }
+             string strContentType;
+@@ -298,14 +298,11 @@
+             }
+             else
+             {
+-                SendErrorResponse(sock, HttpResponseCode.Unsupported, "Unsupported mime type requested");
++                SendErrorResponse(ref sock, HttpResponseCode.Unsupported, "Unsupported mime type requested");
+                 return;
+             }
+ 
+-            SendResponse(sock, responseData, strContentType, responseData.Length);
+-            sock.Shutdown(SocketShutdown.Both);
+-            Logger.Instance.LogDebug("Done Processing: " + uriRequest.ToString());
+-            sock.Close();
++            SendResponse(ref sock, responseData, strContentType, responseData.Length);
+         }
+ 
+         /// <summary>
+@@ -327,14 +324,27 @@
+             return strHeader;
+         }
+ 
+-        void SendResponse(Socket sock, byte[] content, string contentType, int contentLength)
++        void SendResponse(ref Socket sock, byte[] content, string contentType, int contentLength)
+         {
+             string strHeader = CreateHeader(HttpResponseCode.Ok, contentType, contentLength);
+             sock.Send(Encoding.ASCII.GetBytes(strHeader));
+             sock.Send(content, contentLength, SocketFlags.None);
++            // FIXME: The sleep has been added so that the data reaches the browser before
++            // we shutdown the socket. What is strange is Send is a sync call and so the
++            // control should sock.Shutdown only after the Send sends data to the browser
++            // But this is not what happens. Hence this Sleep hack.
++            Thread.Sleep(100);
++            sock.Shutdown(SocketShutdown.Both);
++            sock.Close(); sock = null;
+         }
+ 
+-        void SendErrorResponse(Socket sock, HttpResponseCode status, string errMessage)
++        /// <summary>
++        /// Sends an error response on the socket. Also closes the socket
++        /// </summary>
++        /// <param name="sock">socket to send response to</param>
++        /// <param name="status">Error Code</param>
++        /// <param name="errMessage">Message</param>
++        void SendErrorResponse(ref Socket sock, HttpResponseCode status, string errMessage)
+         {
+             StreamReader reader;
+             string strErrorPage;
+@@ -354,8 +364,11 @@
+ 
+             byte [] outbuf = Encoding.UTF8.GetBytes(strErrorPage);
+             string strHeader = CreateHeader(status, "text/html;charset=utf-8", outbuf.Length);
++            // Header is always in ASCII encoding
+             sock.Send(Encoding.ASCII.GetBytes(strHeader));
+             sock.Send(outbuf, outbuf.Length, SocketFlags.None);
++            sock.Shutdown(SocketShutdown.Both);
++            sock.Close(); sock = null;
+         }
+ 
+         NameValueCollection MakeQueryString(string queryString)
+
+Modified: trunk/OpenDesktop/app.config
+===================================================================
+--- trunk/OpenDesktop/app.config	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/OpenDesktop/app.config	2006-01-03 03:48:32 UTC (rev 5)
+@@ -10,6 +10,15 @@
+             <setting name="IndexPath" serializeAs="String">
+                 <value>C:\test</value>
+             </setting>
++            <setting name="NewIndexPath" serializeAs="String">
++                <value>C:\test1</value>
++            </setting>
++            <setting name="IndexLastUpdated" serializeAs="String">
++                <value>2006-01-01</value>
++            </setting>
++            <setting name="IndexUpdateFrequency" serializeAs="String">
++                <value>24</value>
++            </setting>
+         </OpenDesktop.Properties.Settings>
+     </userSettings>
+ </configuration>
+\ No newline at end of file
+
+Modified: trunk/YammyPlugin/Decoder.cs
+===================================================================
+--- trunk/YammyPlugin/Decoder.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/YammyPlugin/Decoder.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -224,7 +224,7 @@
+         {
+             string date = MakeDTFromCTime(timeStamp).ToLongDateString();
+ 
+-            sb.Append("<div class=\"convo\">");
++            sb.Append("<div class=\"convo-started\">");
+             sb.AppendFormat(Resources.ConversationStarted, date);
+             sb.Append("</div>");
+         }
+@@ -243,7 +243,7 @@
+             string strTag = m.Groups[1].Value;
+             if (strTag.Equals("ding"))
+             {
+-                return @"<span class=""ding"">Buzz!</span>";
++                return @"<span class=""buzz"">Buzz!</span>";
+             }
+             else
+             {
+
+Modified: trunk/YammyPlugin/YammyPlugin.cs
+===================================================================
+--- trunk/YammyPlugin/YammyPlugin.cs	2005-12-31 16:08:25 UTC (rev 4)
++++ trunk/YammyPlugin/YammyPlugin.cs	2006-01-03 03:48:32 UTC (rev 5)
+@@ -73,6 +73,11 @@
+             }
+         }
+ 
++        /// <summary>
++        /// Decodes the file and returns a SearchInfo object for indexing
++        /// </summary>
++        /// <param name="filePath"></param>
++        /// <returns></returns>
+         public SearchInfo ProcessFile(string filePath)
+         {
+             SearchInfo indexvars = null;
+@@ -80,11 +85,10 @@
+             {
+                 if (filePath.Contains("Profiles") && filePath.Contains("Messages"))
+                 {
+-                    Console.Out.WriteLine(filePath);
+                     Decoder d = new Decoder(filePath);
+                     string strText = d.Decode(true);
+                     string strTitle = string.Format(Resources.IndexTitle, d.LocalID, d.RemoteID);
+-                    indexvars = new SearchInfo(strTitle, strText, "display.html");
++                    indexvars = new SearchInfo(strTitle, strText, "display.html?convo=" + filePath);
+                 }
+             }
+             
+
+
+
+From pravin at berlios.de  Tue Jan  3 20:28:04 2006
+From: pravin at berlios.de (pravin at BerliOS)
+Date: Tue, 3 Jan 2006 20:28:04 +0100
+Subject: [Opendesktop-svn] r6 - in trunk: ODIPlugin OpenDesktop WebRoot YammyPlugin
+Message-ID: <200601031928.k03JS4ee014987@sheep.berlios.de>
+
+Author: pravin
+Date: 2006-01-03 20:27:33 +0100 (Tue, 03 Jan 2006)
+New Revision: 6
+
+Added:
+   trunk/WebRoot/display.html
+Modified:
+   trunk/ODIPlugin/ODIPlugin.cs
+   trunk/OpenDesktop/FileExplorer.cs
+   trunk/OpenDesktop/Indexer.cs
+   trunk/OpenDesktop/Logger.cs
+   trunk/OpenDesktop/NameObjectCollection.cs
+   trunk/OpenDesktop/PluginManager.cs
+   trunk/OpenDesktop/ReplaceTag.cs
+   trunk/OpenDesktop/Synchronizer.cs
+   trunk/OpenDesktop/TrayIcon.cs
+   trunk/WebRoot/style.css
+   trunk/YammyPlugin/Decoder.cs
+Log:
+Added 2006 to the copyright info
+
+Modified: trunk/ODIPlugin/ODIPlugin.cs
+===================================================================
+--- trunk/ODIPlugin/ODIPlugin.cs	2006-01-03 03:48:32 UTC (rev 5)
++++ trunk/ODIPlugin/ODIPlugin.cs	2006-01-03 19:27:33 UTC (rev 6)
+@@ -1,5 +1,5 @@
+ // OpenDesktop - A search tool for the Windows desktop
+-// Copyright (C) 2005, Pravin Paratey (pravinp at gmail dot com)
++// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
+ // http://opendesktop.berlios.de
+ //
+ // This program is free software; you can redistribute it and/or
+
+Modified: trunk/OpenDesktop/FileExplorer.cs
+===================================================================
+--- trunk/OpenDesktop/FileExplorer.cs	2006-01-03 03:48:32 UTC (rev 5)
++++ trunk/OpenDesktop/FileExplorer.cs	2006-01-03 19:27:33 UTC (rev 6)
+@@ -1,5 +1,5 @@
+ // OpenDesktop - A search tool for the Windows desktop
+-// Copyright (C) 2005, Pravin Paratey (pravinp at gmail dot com)
++// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
+ // http://opendesktop.berlios.de
+ //
+ // This program is free software; you can redistribute it and/or
+@@ -117,6 +117,9 @@
+             
+             if (!_quit) // If the exit was natural
+             {
++                Logger.Instance.LogDebug("Moving index from " +
++                    Properties.Settings.Default.IndexPath + " to " +
++                    Properties.Settings.Default.NewIndexPath);
+                 // Close index and move it 
+                 m_indexer.Close(); m_indexer = null;
+                 Synchronizer.Instance.LockIndex();
+
+Modified: trunk/OpenDesktop/Indexer.cs
+===================================================================
+--- trunk/OpenDesktop/Indexer.cs	2006-01-03 03:48:32 UTC (rev 5)
++++ trunk/OpenDesktop/Indexer.cs	2006-01-03 19:27:33 UTC (rev 6)
+@@ -1,5 +1,5 @@
+ // OpenDesktop - A search tool for the Windows desktop
+-// Copyright (C) 2005, Pravin Paratey (pravinp at gmail dot com)
++// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
+ // http://opendesktop.berlios.de
+ //
+ // This program is free software; you can redistribute it and/or
+
+Modified: trunk/OpenDesktop/Logger.cs
+===================================================================
+--- trunk/OpenDesktop/Logger.cs	2006-01-03 03:48:32 UTC (rev 5)
++++ trunk/OpenDesktop/Logger.cs	2006-01-03 19:27:33 UTC (rev 6)
+@@ -1,5 +1,5 @@
+ // OpenDesktop - A search tool for the Windows desktop
+-// Copyright (C) 2005, Pravin Paratey (pravinp at gmail dot com)
++// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
+ // http://opendesktop.berlios.de
+ //
+ // This program is free software; you can redistribute it and/or
+@@ -43,10 +43,11 @@
+             m_logQueue = new Queue(100, 10);
+ 
+             //TODO: generate log file in WebRoot directory
+-            m_objStreamWriter = new StreamWriter("OpenDesktopLog.html", false, Encoding.UTF8);
++            m_objStreamWriter = new StreamWriter("WebRoot\\OpenDesktopLog.html", false, Encoding.UTF8);
+             m_objStreamWriter.WriteLine("<html><head><title>Open Desktop Log file</title>");
+             m_objStreamWriter.WriteLine("<link rel=\"stylesheet\" href=\"style.css\" />");
+             m_objStreamWriter.WriteLine("</head><body>");
++            m_objStreamWriter.WriteLine("<div class=\"container\"><div class=\"content\">");
+ 
+             m_timer = new Timer(new TimerCallback(Flush), null, 0, 1000 * 60); // Once a minute, flush log
+         }
+@@ -57,7 +58,7 @@
+             m_timer.Dispose();
+             if (m_objStreamWriter != null)
+             {
+-                m_objStreamWriter.WriteLine("</body></html>");
++                m_objStreamWriter.WriteLine("</div></div></body></html>");
+                 m_objStreamWriter.Flush();
+                 m_objStreamWriter.Close();
+                 m_objStreamWriter = null;
+@@ -102,7 +103,7 @@
+             lock (m_logQueue)
+             {
+                 DateTime dt = DateTime.Now;
+-                string strTime = string.Format("{0}:{1}:{2}:{3}", dt.Hour, dt.Minute, dt.Second, dt.Millisecond);
++                string strTime = string.Format("{0:D2}:{1:D2}:{2:D2}:{3:D3}", dt.Hour, dt.Minute, dt.Second, dt.Millisecond);
+                 m_logQueue.Enqueue(string.Format("<div{3}>{0} [{1}] {2}</div>", strTime, type, msg, (m_bAlternate ? " class=\"alt\"" : string.Empty)));
+                 m_bAlternate = !m_bAlternate;
+             }
+
+Modified: trunk/OpenDesktop/NameObjectCollection.cs
+===================================================================
+--- trunk/OpenDesktop/NameObjectCollection.cs	2006-01-03 03:48:32 UTC (rev 5)
++++ trunk/OpenDesktop/NameObjectCollection.cs	2006-01-03 19:27:33 UTC (rev 6)
+@@ -1,5 +1,5 @@
+ // OpenDesktop - A search tool for the Windows desktop
+-// Copyright (C) 2005, Pravin Paratey (pravinp at gmail dot com)
++// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
+ // http://opendesktop.berlios.de
+ //
+ // This program is free software; you can redistribute it and/or
+
+Modified: trunk/OpenDesktop/PluginManager.cs
+===================================================================
+--- trunk/OpenDesktop/PluginManager.cs	2006-01-03 03:48:32 UTC (rev 5)
++++ trunk/OpenDesktop/PluginManager.cs	2006-01-03 19:27:33 UTC (rev 6)
+@@ -1,5 +1,5 @@
+ // OpenDesktop - A search tool for the Windows desktop
+-// Copyright (C) 2005, Pravin Paratey (pravinp at gmail dot com)
++// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
+ // http://opendesktop.berlios.de
+ //
+ // This program is free software; you can redistribute it and/or
+
+Modified: trunk/OpenDesktop/ReplaceTag.cs
+===================================================================
+--- trunk/OpenDesktop/ReplaceTag.cs	2006-01-03 03:48:32 UTC (rev 5)
++++ trunk/OpenDesktop/ReplaceTag.cs	2006-01-03 19:27:33 UTC (rev 6)
+@@ -1,5 +1,5 @@
+ // OpenDesktop - A search tool for the Windows desktop
+-// Copyright (C) 2005, Pravin Paratey (pravinp at gmail dot com)
++// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
+ // http://opendesktop.berlios.de
+ //
+ // This program is free software; you can redistribute it and/or
+
+Modified: trunk/OpenDesktop/Synchronizer.cs
+===================================================================
+--- trunk/OpenDesktop/Synchronizer.cs	2006-01-03 03:48:32 UTC (rev 5)
++++ trunk/OpenDesktop/Synchronizer.cs	2006-01-03 19:27:33 UTC (rev 6)
+@@ -1,3 +1,20 @@
++// OpenDesktop - A search tool for the Windows desktop
++// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
++// http://opendesktop.berlios.de
++//
++// This program is free software; you can redistribute it and/or
++// modify it under the terms of the GNU General Public License
++// as published by the Free Software Foundation; either version 2
++// of the License, or (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program; if not, write to the Free Software
++// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ using System;
+ using System.Collections.Generic;
+ using System.Text;
+
+Modified: trunk/OpenDesktop/TrayIcon.cs
+===================================================================
+--- trunk/OpenDesktop/TrayIcon.cs	2006-01-03 03:48:32 UTC (rev 5)
++++ trunk/OpenDesktop/TrayIcon.cs	2006-01-03 19:27:33 UTC (rev 6)
+@@ -1,20 +1,20 @@
+-// Yammy - Yahoo Messenger Archives Decoder
+-// Copyright (C) 2005  Pravin Paratey (pravinp [at] gmail [dot] com)
+-// http://yammy.sourceforge.net
+-// 
++// OpenDesktop - A search tool for the Windows desktop
++// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
++// http://opendesktop.berlios.de
++//
+ // This program is free software; you can redistribute it and/or
+ // modify it under the terms of the GNU General Public License
+ // as published by the Free Software Foundation; either version 2
+ // of the License, or (at your option) any later version.
+-// 
++//
+ // This program is distributed in the hope that it will be useful,
+ // but WITHOUT ANY WARRANTY; without even the implied warranty of
+ // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ // GNU General Public License for more details.
+-// 
++//
+ // You should have received a copy of the GNU General Public License
+ // along with this program; if not, write to the Free Software
+-// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ 
+ using System;
+ using System.Windows.Forms;
+
+Added: trunk/WebRoot/display.html
+===================================================================
+--- trunk/WebRoot/display.html	2006-01-03 03:48:32 UTC (rev 5)
++++ trunk/WebRoot/display.html	2006-01-03 19:27:33 UTC (rev 6)
+@@ -0,0 +1,31 @@
++<html>
++<head>
++<title>Display</title>
++<link rel=stylesheet type="text/css" href="style.css">
++</head>
++<body>
++<div class="container">
++	<div class="header"><a href="http://opendesktop.berlios.de">Help</a></div>
++	<div class="content">
++	<table cellspacing="0" cellpadding="2" border="0" width="100%">
++	<tr>
++	<td><img src="logo.gif"/></td>
++	<td valign="middle" align="right">
++		<form action="search.html" method="get" class="search">
++		<input type="text" name="search" value="" size="40" />
++		<input type="submit" value="Search" /><br />
++		<input type="radio" name="searchdomain" value="all" />All Sites 
++		<input type="radio" name="searchdomain" value="current" />Current Site
++		</form>
++	</td>
++	</tr>
++	</table>
++	<hr size="1" />
++	<$YammyDecode$>
++	</div>
++	<div class="footer">
++	OpenDesktop Search &copy; 2005, Pravin Paratey
++	</div>
++</div>
++</body>
++</html>
+\ No newline at end of file
+
+Modified: trunk/WebRoot/style.css
+===================================================================
+--- trunk/WebRoot/style.css	2006-01-03 03:48:32 UTC (rev 5)
++++ trunk/WebRoot/style.css	2006-01-03 19:27:33 UTC (rev 6)
+@@ -20,6 +20,7 @@
+ }
+ 
+ .container {
++	margin:0 auto;
+ 	background-color:#fff;
+ 	float:left;
+ 	text-align:left;
+
+Modified: trunk/YammyPlugin/Decoder.cs
+===================================================================
+--- trunk/YammyPlugin/Decoder.cs	2006-01-03 03:48:32 UTC (rev 5)
++++ trunk/YammyPlugin/Decoder.cs	2006-01-03 19:27:33 UTC (rev 6)
+@@ -1,5 +1,5 @@
+ // OpenDesktop - A search tool for the Windows desktop
+-// Copyright (C) 2005, Pravin Paratey (pravinp at gmail dot com)
++// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
+ // http://opendesktop.berlios.de
+ //
+ // This program is free software; you can redistribute it and/or
+
+
+
+From pravin at berlios.de  Tue Jan  3 20:29:02 2006
+From: pravin at berlios.de (pravin at BerliOS)
+Date: Tue, 3 Jan 2006 20:29:02 +0100
+Subject: [Opendesktop-svn] r7 - trunk/OpenDesktop
+Message-ID: <200601031929.k03JT223015506@sheep.berlios.de>
+
+Author: pravin
+Date: 2006-01-03 20:28:52 +0100 (Tue, 03 Jan 2006)
+New Revision: 7
+
+Modified:
+   trunk/OpenDesktop/WebServer.cs
+Log:
+Added basic POST method support
+
+Modified: trunk/OpenDesktop/WebServer.cs
+===================================================================
+--- trunk/OpenDesktop/WebServer.cs	2006-01-03 19:27:33 UTC (rev 6)
++++ trunk/OpenDesktop/WebServer.cs	2006-01-03 19:28:52 UTC (rev 7)
+@@ -1,5 +1,5 @@
+ // OpenDesktop - A search tool for the Windows desktop
+-// Copyright (C) 2005, Pravin Paratey (pravinp at gmail dot com)
++// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
+ // http://opendesktop.berlios.de
+ //
+ // This program is free software; you can redistribute it and/or
+@@ -320,7 +320,7 @@
+                 "Server: " + Resources.ServerString + CRLF +
+                 "Content-Type: " + contentType + CRLF +
+                 "Accept-Ranges: bytes" + CRLF +
+-                "Content-Length:" + contentLength + CRLF + CRLF;
++                "Content-Length: " + contentLength + CRLF + CRLF;
+             return strHeader;
+         }
+ 
+@@ -397,7 +397,7 @@
+         /// <returns>Returns uri object on success else null</returns>
+         Uri ValidateRequest(string request)
+         {
+-            string strUrl;
++            string strUrl = null;
+             if (request.StartsWith("GET", StringComparison.OrdinalIgnoreCase))
+             {
+                 // Do Get
+@@ -410,12 +410,21 @@
+             else if (request.StartsWith("POST", StringComparison.OrdinalIgnoreCase))
+             {
+                 // Do Post
+-                return null;
++                // TODO: Content-Type field is ignored for now.
++                // Later, you'd want to use the content-type to determine if the data
++                // that follows is of type text, else flag an error
++                int iStart = request.IndexOf("\r\n\r\n") + 4;
++                if (iStart > 4)
++                {
++                    strUrl = request.Substring(iStart);
++                }
+             }
+-            else
++            
++            if(strUrl == null)
+             {
+                 return null;
+             }
++            
+             Uri uriRequest = null;
+             try
+             {
+
+
+
+From pravin at berlios.de  Mon Jan  9 18:38:30 2006
+From: pravin at berlios.de (pravin at BerliOS)
+Date: Mon, 9 Jan 2006 18:38:30 +0100
+Subject: [Opendesktop-svn] r9 - in trunk: OpenDesktop WebRoot
+Message-ID: <200601091738.k09HcUqp004681@sheep.berlios.de>
+
+Author: pravin
+Date: 2006-01-09 18:38:28 +0100 (Mon, 09 Jan 2006)
+New Revision: 9
+
+Removed:
+   trunk/OpenDesktop/yammy.ICO
+Modified:
+   trunk/OpenDesktop/FileExplorer.cs
+   trunk/WebRoot/style.css
+Log:
+Replaced space with tabs
+
+Modified: trunk/OpenDesktop/FileExplorer.cs
+===================================================================
+--- trunk/OpenDesktop/FileExplorer.cs	2006-01-08 10:50:20 UTC (rev 8)
++++ trunk/OpenDesktop/FileExplorer.cs	2006-01-09 17:38:28 UTC (rev 9)
+@@ -25,201 +25,209 @@
+ 
+ namespace OpenDesktop
+ {
+-    /// <summary>
+-    /// Public delegate which tells how many documents have been indexed
+-    /// </summary>
+-    /// <param name="numDocs">number of documents already indexed</param>
+-    public delegate void IndexProgressHandler(int numDocs);
++	/// <summary>
++	/// Public delegate which tells how many documents have been indexed
++	/// </summary>
++	/// <param name="numDocs">number of documents already indexed</param>
++	public delegate void IndexProgressHandler(int numDocs);
+ 
+-    class FileExplorer : IDisposable
+-    {
+-        #region Private Vars
+-        private NameObjectCollection m_fileFunctionMap;
+-        private Thread m_objThread;
+-        private bool _quit;
+-        private Hashtable m_htDNV; // Donot visit hashmap
+-        Indexer m_indexer;
+-        private int m_iNumDocsDone;
+-        private bool m_bAgressive; // true = dont sleep between documents
+-        #endregion
++	class FileExplorer : IDisposable
++	{
++		#region Private Vars
++		private NameObjectCollection m_fileFunctionMap;
++		private Thread m_objThread;
++		private bool _quit;
++		private Hashtable m_htDNV; // Donot visit hashmap
++		Indexer m_indexer;
++		private int m_iNumDocsDone;
++		private bool m_bAgressive; // true = dont sleep between documents
++		#endregion
+ 
+-        #region Public Events
+-        public event IndexProgressHandler IndexProgress;
+-        private void OnIndexProgress(int numDocs)
+-        {
+-            if (IndexProgress != null)
+-            {
+-                IndexProgress(numDocs);
+-            }
+-        }
+-        #endregion
++		#region Public Events
++		public event IndexProgressHandler IndexProgress;
++		private void OnIndexProgress(int numDocs)
++		{
++			if (IndexProgress != null)
++			{
++				IndexProgress(numDocs);
++			}
++		}
++		#endregion
+ 
+-        #region Constructor
+-        public FileExplorer(NameObjectCollection fileFunctionMap)
+-        {
+-            m_fileFunctionMap = fileFunctionMap;
+-            _quit = false;
+-            //TODO: m_htDNV = 
+-            m_indexer = new Indexer(Properties.Settings.Default.NewIndexPath, IndexMode.CREATE);
+-        }
++		#region Constructor
++		public FileExplorer(NameObjectCollection fileFunctionMap)
++		{
++			m_fileFunctionMap = fileFunctionMap;
++			_quit = false;
++			//TODO: m_htDNV = 
++			m_indexer = new Indexer(Properties.Settings.Default.NewIndexPath, IndexMode.CREATE);
++		}
+ 
+-        public void Dispose()
+-        {
+-            if (m_objThread != null)
+-            {
+-                m_objThread.Abort();
+-            }
+-            if (m_indexer != null)
+-            {
+-                m_indexer.Close();
+-            }
+-        }
+-        #endregion
++		public void Dispose()
++		{
++			if (m_objThread != null)
++			{
++				m_objThread.Abort();
++			}
++			if (m_indexer != null)
++			{
++				m_indexer.Close();
++			}
++		}
++		#endregion
+ 
+-        #region Run/Stop/Pause/Resume
+-        public void Run()
+-        {
+-            m_iNumDocsDone = 0;
++		#region Run/Stop/Pause/Resume
++		public void Run()
++		{
++			m_iNumDocsDone = 0;
+ 
+-            // Check if an update of the index is due
+-            TimeSpan objUpdateFrequency = new TimeSpan(Properties.Settings.Default.IndexUpdateFrequency, 0, 0);
+-            if (DateTime.Now.Subtract(Properties.Settings.Default.IndexLastUpdated) < objUpdateFrequency)
+-            {
+-                Logger.Instance.LogDebug("Update time not elapsed. Exiting FileExplorer");
+-                return;
+-            }
++			// Check if an update of the index is due
++			TimeSpan objUpdateFrequency = new TimeSpan(Properties.Settings.Default.IndexUpdateFrequency, 0, 0);
++			if (DateTime.Now.Subtract(Properties.Settings.Default.IndexLastUpdated) < objUpdateFrequency)
++			{
++				Logger.Instance.LogDebug("Update time not elapsed. Exiting FileExplorer");
++				return;
++			}
+ 
+-            m_objThread = new Thread(new ThreadStart(Explore));
+-            m_objThread.Priority = ThreadPriority.Lowest;
+-            m_objThread.Name = "FileExplorer";
+-            try
+-            {
+-                m_objThread.Start();
+-            }
+-            catch (Exception e)
+-            {
+-                Logger.Instance.LogException(e);
+-            }
+-        }
++			m_objThread = new Thread(new ThreadStart(Explore));
++			m_objThread.Priority = ThreadPriority.Lowest;
++			m_objThread.Name = "FileExplorer";
++			try
++			{
++				m_objThread.Start();
++			}
++			catch (Exception e)
++			{
++				Logger.Instance.LogException(e);
++			}
++		}
+ 
+-        public void Pause()
+-        {
+-            if (m_objThread != null && m_objThread.ThreadState == ThreadState.Running)
+-            {
+-                m_objThread.Suspend();
+-            }
+-        }
++		public void Pause()
++		{
++			if (m_objThread != null && m_objThread.ThreadState == ThreadState.Running)
++			{
++				m_objThread.Suspend();
++			}
++		}
+ 
+-        public void Resume()
+-        {
+-            if (m_objThread != null && m_objThread.ThreadState == ThreadState.Suspended)
+-            {
+-                m_objThread.Resume();
+-            }
+-        }
++		public void Resume()
++		{
++			if (m_objThread != null && m_objThread.ThreadState == ThreadState.Suspended)
++			{
++				m_objThread.Resume();
++			}
++		}
+ 
+-        public void Stop()
+-        {
+-            _quit = true;
+-        }
+-        #endregion
++		public void Stop()
++		{
++			_quit = true;
++		}
++		#endregion
+ 
+-        /// <summary>
+-        /// Explores
+-        /// </summary>
+-        private void Explore()
+-        {
+-            string [] strDriveList = Environment.GetLogicalDrives();
+-            foreach (string strDrive in strDriveList)
+-            {
+-                DriveInfo info = new DriveInfo(strDrive);
+-                if (info.IsReady)
+-                {
+-                    Explore(strDrive);
+-                }
+-            }
+-            
+-            if (!_quit) // If the exit was natural
+-            {
+-                Logger.Instance.LogDebug("Moving index from " +
+-                    Properties.Settings.Default.IndexPath + " to " +
+-                    Properties.Settings.Default.NewIndexPath);
+-                // Close index and move it 
+-                m_indexer.Close(); m_indexer = null;
++		/// <summary>
++		/// Explores
++		/// </summary>
++		private void Explore()
++		{
++			string [] strDriveList = Environment.GetLogicalDrives();
++			foreach (string strDrive in strDriveList)
++			{
++				DriveInfo info = new DriveInfo(strDrive);
++				if (info.IsReady)
++				{
++					Logger.Instance.LogDebug("Exploring " + strDrive);
++					Explore(strDrive);
++				}
++			}
+ 
+-                // Lock the index as we are going to be moving it
+-                // FIXME: RACE CONDITION!!!! The code below is useless
+-                Synchronizer.Instance.LockIndex(this);
+-                Directory.Delete(Properties.Settings.Default.IndexPath, true);
+-                Directory.Move(Properties.Settings.Default.NewIndexPath, 
+-                    Properties.Settings.Default.IndexPath);
+-                Synchronizer.Instance.ReleaseIndex(this);
++			if (!_quit) // If the exit was natural
++			{
++				Logger.Instance.LogDebug("Moving index from " +
++					Properties.Settings.Default.IndexPath + " to " +
++					Properties.Settings.Default.NewIndexPath);
++				// Close index and move it 
++				m_indexer.Close(); m_indexer = null;
+ 
+-                Properties.Settings.Default.IndexLastUpdated = DateTime.Now;
+-                Properties.Settings.Default.Save();
+-            }
+-        }
++				// Lock the index as we are going to be moving it
++				// FIXME: RACE CONDITION!!!! The code below is useless
++				Synchronizer.Instance.LockIndex(this);
++				try
++				{
++					Directory.Delete(Properties.Settings.Default.IndexPath, true);
++					Directory.Move(Properties.Settings.Default.NewIndexPath,
++						Properties.Settings.Default.IndexPath);
++					Synchronizer.Instance.ReleaseIndex(this);
+ 
+-        private void Explore(string directory)
+-        {
+-            if (_quit)
+-                return;
++					Properties.Settings.Default.IndexLastUpdated = DateTime.Now;
++					Properties.Settings.Default.Save();
++				}
++				catch (Exception e)
++				{
++					Logger.Instance.LogException(e);
++				}
++			}
++		}
+ 
+-            string[] strDirList;
+-            string[] strFileList;
+-            
+-            try
+-            {
+-                strDirList = Directory.GetDirectories(directory);
+-                strFileList = Directory.GetFiles(directory);
+-            }
+-            catch
+-            {
+-                return;
+-            }
++		private void Explore(string directory)
++		{
++			if (_quit)
++				return;
+ 
+-            foreach (string strFile in strFileList)
+-            {
+-                if (_quit)
+-                    return;
++			string[] strDirList;
++			string[] strFileList;
+ 
+-                string strExtention = Path.GetExtension(strFile).ToLower();
+-                if (strExtention.Length == 0)
+-                    continue;
+-                ArrayList arPluginList = m_fileFunctionMap.Get(strExtention);
+-                if (arPluginList == null)
+-                    continue;
++			try
++			{
++				strDirList = Directory.GetDirectories(directory);
++				strFileList = Directory.GetFiles(directory);
++			}
++			catch
++			{
++				return;
++			}
+ 
+-                foreach (IPlugin plugin in arPluginList)
+-                {
+-                    try
+-                    {
+-                        SearchInfo sInfo = plugin.ProcessFile(strFile);
+-                        if (sInfo != null)
+-                        {
+-                            m_indexer.AddDocument(sInfo);
+-                            OnIndexProgress(++m_iNumDocsDone);
+-                        }
+-                    }
+-                    catch (Exception e)
+-                    {
+-                        Logger.Instance.LogException(e);
+-                    }
+-                }
+-            }
+-            foreach (string strDir in strDirList)
+-            {
+-                if (_quit)
+-                    return;
+-                try
+-                {
+-                    Explore(strDir);
+-                }
+-                catch (Exception e) // Out of stack exception?
+-                {
+-                    Logger.Instance.LogException(e);
+-                }
+-            }
+-        }
+-    }
++			foreach (string strFile in strFileList)
++			{
++				if (_quit)
++					return;
++
++				string strExtention = Path.GetExtension(strFile).ToLower();
++				if (strExtention.Length == 0)
++					continue;
++				ArrayList arPluginList = m_fileFunctionMap.Get(strExtention);
++				if (arPluginList == null)
++					continue;
++
++				foreach (IPlugin plugin in arPluginList)
++				{
++					try
++					{
++						SearchInfo sInfo = plugin.ProcessFile(strFile);
++						if (sInfo != null)
++						{
++							m_indexer.AddDocument(sInfo);
++							OnIndexProgress(++m_iNumDocsDone);
++						}
++					}
++					catch (Exception e)
++					{
++						Logger.Instance.LogException(e);
++					}
++				}
++			}
++			foreach (string strDir in strDirList)
++			{
++				if (_quit)
++					return;
++				try
++				{
++					Explore(strDir);
++				}
++				catch (Exception e) // Out of stack exception?
++				{
++					Logger.Instance.LogException(e);
++				}
++			}
++		}
++	}
+ }
+
+Deleted: trunk/OpenDesktop/yammy.ICO
+===================================================================
+(Binary files differ)
+
+Modified: trunk/WebRoot/style.css
+===================================================================
+--- trunk/WebRoot/style.css	2006-01-08 10:50:20 UTC (rev 8)
++++ trunk/WebRoot/style.css	2006-01-09 17:38:28 UTC (rev 9)
+@@ -104,4 +104,35 @@
+ .buzz {
+ 	color:#800;
+ 	font-weight:bold;
++}
++
++.setup {
++	margin:20px auto;
++	font-size:12pt;
++	font-family:Bookman Old Style, serif;
++	width:400px;
++	line-height:150%;
++	text-align:left;
++	background:#fee;
++	padding:10px;
++	border:1px solid #fdd;
++}
++
++.setup input {
++	border-style:none;
++	background:#ffe;
++	padding:4px;
++	text-decoration:none;
++	color:#000;
++}
++
++.setup-button a {
++	border:1px solid #ddf;
++	background:#eef;
++	padding:4px;
++	text-decoration:none;
++	color:#000;
++}
++.setup-button a:hover {
++	background:#fff;
+ }
+\ No newline at end of file
+
+
+
+From pravin at berlios.de  Sun Jan 22 12:19:33 2006
+From: pravin at berlios.de (pravin at BerliOS)
+Date: Sun, 22 Jan 2006 12:19:33 +0100
+Subject: [Opendesktop-svn] r10 - in trunk: . IPlugin
+Message-ID: <200601221119.k0MBJXXb024229@sheep.berlios.de>
+
+Author: pravin
+Date: 2006-01-22 12:19:32 +0100 (Sun, 22 Jan 2006)
+New Revision: 10
+
+Added:
+   trunk/IPlugin/
+Removed:
+   trunk/IPlugin/Properties/
+Modified:
+   trunk/IPlugin/ODIPlugin.csproj
+Log:
+Renamed ODIPlugin as IPlugin
+
+Copied: trunk/IPlugin (from rev 8, trunk/ODIPlugin)
+
+Modified: trunk/IPlugin/ODIPlugin.csproj
+===================================================================
+--- trunk/ODIPlugin/ODIPlugin.csproj	2006-01-08 10:50:20 UTC (rev 8)
++++ trunk/IPlugin/ODIPlugin.csproj	2006-01-22 11:19:32 UTC (rev 10)
+@@ -15,7 +15,7 @@
+     <DebugType>full</DebugType>
+     <Optimize>false</Optimize>
+     <OutputPath>..\OpenDesktop\bin\Debug\</OutputPath>
+-    <DefineConstants>DEBUG;TRACE</DefineConstants>
++    <DefineConstants>TRACE;DEBUG</DefineConstants>
+     <ErrorReport>prompt</ErrorReport>
+     <WarningLevel>4</WarningLevel>
+   </PropertyGroup>
+@@ -23,7 +23,7 @@
+     <DebugType>pdbonly</DebugType>
+     <Optimize>false</Optimize>
+     <OutputPath>..\OpenDesktop\bin\Release\</OutputPath>
+-    <DefineConstants>DEBUG;TRACE</DefineConstants>
++    <DefineConstants>TRACE;DEBUG</DefineConstants>
+     <ErrorReport>prompt</ErrorReport>
+     <WarningLevel>4</WarningLevel>
+   </PropertyGroup>
+
+
+
+From pravin at berlios.de  Sun Jan 22 12:20:28 2006
+From: pravin at berlios.de (pravin at BerliOS)
+Date: Sun, 22 Jan 2006 12:20:28 +0100
+Subject: [Opendesktop-svn] r11 - trunk/IPlugin
+Message-ID: <200601221120.k0MBKSi2024346@sheep.berlios.de>
+
+Author: pravin
+Date: 2006-01-22 12:20:28 +0100 (Sun, 22 Jan 2006)
+New Revision: 11
+
+Added:
+   trunk/IPlugin/IPlugin.cs
+   trunk/IPlugin/IPlugin.csproj
+Removed:
+   trunk/IPlugin/ODIPlugin.cs
+   trunk/IPlugin/ODIPlugin.csproj
+Log:
+Renamed ODIPlugin to IPlugin
+
+Copied: trunk/IPlugin/IPlugin.cs (from rev 10, trunk/IPlugin/ODIPlugin.cs)
+
+Copied: trunk/IPlugin/IPlugin.csproj (from rev 10, trunk/IPlugin/ODIPlugin.csproj)
+
+Deleted: trunk/IPlugin/ODIPlugin.cs
+===================================================================
+--- trunk/IPlugin/ODIPlugin.cs	2006-01-22 11:19:32 UTC (rev 10)
++++ trunk/IPlugin/ODIPlugin.cs	2006-01-22 11:20:28 UTC (rev 11)
+@@ -1,103 +0,0 @@
+-// OpenDesktop - A search tool for the Windows desktop
+-// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
+-// http://opendesktop.berlios.de
+-//
+-// This program is free software; you can redistribute it and/or
+-// modify it under the terms of the GNU General Public License
+-// as published by the Free Software Foundation; either version 2
+-// of the License, or (at your option) any later version.
+-//
+-// This program is distributed in the hope that it will be useful,
+-// but WITHOUT ANY WARRANTY; without even the implied warranty of
+-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-// GNU General Public License for more details.
+-//
+-// You should have received a copy of the GNU General Public License
+-// along with this program; if not, write to the Free Software
+-// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+-using System;
+-using System.Collections;
+-using System.Collections.Specialized;
+-
+-namespace ODIPlugin
+-{
+-    #region class SearchInfo
+-    /// <summary>
+-    /// Contains info about the file to facilitate Indexing
+-    /// </summary>
+-    public class SearchInfo
+-    {
+-        #region Member Variables
+-        private string m_strTitle;
+-        private string m_strText;
+-        private string m_strLauncher;
+-        #endregion
+-
+-        #region Constructor
+-        public SearchInfo(string title, string text)
+-        {
+-            m_strTitle = title;
+-            m_strText = text;
+-            m_strLauncher = null;
+-        }
+-        public SearchInfo(string title, string text, string launcher)
+-        {
+-            m_strTitle = title;
+-            m_strText = text;
+-            m_strLauncher = launcher;
+-        }
+-        #endregion
+-
+-        #region Properties
+-        public string Title
+-        {
+-            get { return m_strTitle; }
+-        }
+-        public string Text
+-        {
+-            get { return m_strText; }
+-        }
+-        public string Launcher
+-        {
+-            get { return m_strLauncher; }
+-        }
+-        #endregion
+-    }
+-    #endregion
+-
+-    #region IPlugin Interface
+-    public interface IPlugin
+-    {
+-        /// <summary>
+-        /// Enter tags that you want to register here. If a tag is registered by 
+-        /// another plugin and you try to register it again, your registration 
+-        /// will fail. While not a rule, do use tags of the form: PluginName.TagName
+-        /// </summary>
+-        string[] RegisteredHTMLTags { get;}
+-        /// <summary>
+-        /// Name of plugin. Shows up on the plugins config page
+-        /// </summary>
+-        string PluginName { get;}
+-        /// <summary>
+-        /// File extensions on which Yammy will call this plugin
+-        /// </summary>
+-        string[] RegisteredFileExtentions { get;}
+-
+-        /// <summary>
+-        /// Extract indexable content from filePath
+-        /// </summary>
+-        /// <param name="filePath">file to parse</param>
+-        /// <returns>IndexVars object</returns>
+-        SearchInfo ProcessFile(string filePath);
+-
+-        /// <summary>
+-        /// Process the Registered tag
+-        /// </summary>
+-        /// <param name="tag">Tag that this plugin has registered</param>
+-        /// <param name="queryString">QueryString of the request. 
+-        /// Use this as arguments to your function.</param>
+-        /// <returns>Text to replace this tag with</returns>
+-        string ProcessTag(string tag, NameValueCollection queryString);
+-    }
+-    #endregion
+-}
+
+Deleted: trunk/IPlugin/ODIPlugin.csproj
+===================================================================
+--- trunk/IPlugin/ODIPlugin.csproj	2006-01-22 11:19:32 UTC (rev 10)
++++ trunk/IPlugin/ODIPlugin.csproj	2006-01-22 11:20:28 UTC (rev 11)
+@@ -1,49 +0,0 @@
+-?<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+-  <PropertyGroup>
+-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+-    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+-    <ProductVersion>8.0.50727</ProductVersion>
+-    <SchemaVersion>2.0</SchemaVersion>
+-    <ProjectGuid>{99E38044-8BFC-4805-94F9-84C275E3120D}</ProjectGuid>
+-    <OutputType>Library</OutputType>
+-    <AppDesignerFolder>Properties</AppDesignerFolder>
+-    <RootNamespace>ODIPlugin</RootNamespace>
+-    <AssemblyName>ODIPlugin</AssemblyName>
+-  </PropertyGroup>
+-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+-    <DebugSymbols>true</DebugSymbols>
+-    <DebugType>full</DebugType>
+-    <Optimize>false</Optimize>
+-    <OutputPath>..\OpenDesktop\bin\Debug\</OutputPath>
+-    <DefineConstants>TRACE;DEBUG</DefineConstants>
+-    <ErrorReport>prompt</ErrorReport>
+-    <WarningLevel>4</WarningLevel>
+-  </PropertyGroup>
+-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+-    <DebugType>pdbonly</DebugType>
+-    <Optimize>false</Optimize>
+-    <OutputPath>..\OpenDesktop\bin\Release\</OutputPath>
+-    <DefineConstants>TRACE;DEBUG</DefineConstants>
+-    <ErrorReport>prompt</ErrorReport>
+-    <WarningLevel>4</WarningLevel>
+-  </PropertyGroup>
+-  <ItemGroup>
+-    <Reference Include="System" />
+-  </ItemGroup>
+-  <ItemGroup>
+-    <Compile Include="ODIPlugin.cs" />
+-    <Compile Include="Properties\AssemblyInfo.cs" />
+-  </ItemGroup>
+-  <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
+-  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+-       Other similar extension points exist, see Microsoft.Common.targets.
+-  <Target Name="BeforeBuild">
+-  </Target>
+-  <Target Name="AfterBuild">
+-  </Target>
+-  -->
+-  <PropertyGroup>
+-    <PostBuildEvent>
+-    </PostBuildEvent>
+-  </PropertyGroup>
+-</Project>
+\ No newline at end of file
+
+
+
+From pravin at berlios.de  Sun Jan 22 12:25:32 2006
+From: pravin at berlios.de (pravin at BerliOS)
+Date: Sun, 22 Jan 2006 12:25:32 +0100
+Subject: [Opendesktop-svn] r12 - in trunk: . IPlugin OpenDesktop WebRoot YammyPlugin
+Message-ID: <200601221125.k0MBPWfl024649@sheep.berlios.de>
+
+Author: pravin
+Date: 2006-01-22 12:25:28 +0100 (Sun, 22 Jan 2006)
+New Revision: 12
+
+Added:
+   trunk/IPlugin/AssemblyInfo.cs
+   trunk/OpenDesktop/AssemblyInfo.cs
+   trunk/OpenDesktop/FirstTimeUser.cs
+   trunk/OpenDesktop/IndexGeneration.cs
+   trunk/OpenDesktop/IndexGeneration.resx
+   trunk/OpenDesktop/OpenDesktop.resources
+   trunk/OpenDesktop/Resources.cs
+   trunk/OpenDesktop/Settings.cs
+   trunk/OpenDesktop/buildevents.bat
+   trunk/YammyPlugin/AssemblyInfo.cs
+   trunk/YammyPlugin/Resources.cs
+Removed:
+   trunk/ODIPlugin/
+   trunk/OpenDesktop/Config.cs
+   trunk/OpenDesktop/Properties/
+   trunk/OpenDesktop/app.config
+   trunk/YammyPlugin/Properties/
+Modified:
+   trunk/IPlugin/IPlugin.cs
+   trunk/IPlugin/IPlugin.csproj
+   trunk/OpenDesktop.sln
+   trunk/OpenDesktop/FileExplorer.cs
+   trunk/OpenDesktop/Indexer.cs
+   trunk/OpenDesktop/OpenDesktop.csproj
+   trunk/OpenDesktop/PluginManager.cs
+   trunk/OpenDesktop/Program.cs
+   trunk/OpenDesktop/ReplaceTag.cs
+   trunk/OpenDesktop/TrayIcon.cs
+   trunk/WebRoot/config.html
+   trunk/WebRoot/index.html
+   trunk/WebRoot/style.css
+   trunk/YammyPlugin/Decoder.cs
+   trunk/YammyPlugin/YammyPlugin.cs
+   trunk/YammyPlugin/YammyPlugin.csproj
+Log:
+o Migrated from Visual C# 2005 Express to SharpDevelop 2.0 beta
+o If user is a first time user, then a dialog is displayed and user told to wait while the index is generated
+o FileExplorer has two modes - aggressive and non-aggressive
+o FileExplorer raises two more events - ExploreProgress and ExploreDone
+o Settings and Resource classes added to mimic VCS2005. These will help in localization later.
+
+Added: trunk/IPlugin/AssemblyInfo.cs
+===================================================================
+--- trunk/IPlugin/AssemblyInfo.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/IPlugin/AssemblyInfo.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -0,0 +1,32 @@
++using System.Reflection;
++using System.Runtime.CompilerServices;
++
++// Information about this assembly is defined by the following
++// attributes.
++//
++// change them to the information which is associated with the assembly
++// you compile.
++
++[assembly: AssemblyTitle("")]
++[assembly: AssemblyDescription("")]
++[assembly: AssemblyConfiguration("")]
++[assembly: AssemblyCompany("")]
++[assembly: AssemblyProduct("")]
++[assembly: AssemblyCopyright("")]
++[assembly: AssemblyTrademark("")]
++[assembly: AssemblyCulture("")]
++
++// The assembly version has following format :
++//
++// Major.Minor.Build.Revision
++//
++// You can specify all values by your own or you can build default build and revision
++// numbers with the '*' character (the default):
++
++[assembly: AssemblyVersion("1.0.*")]
++
++// The following attributes specify the key for the sign of your assembly. See the
++// .NET Framework documentation for more information about signing.
++// This is not required, if you don't want signing let these attributes like they're.
++[assembly: AssemblyDelaySign(false)]
++[assembly: AssemblyKeyFile("")]
+
+Modified: trunk/IPlugin/IPlugin.cs
+===================================================================
+--- trunk/IPlugin/IPlugin.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/IPlugin/IPlugin.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -19,7 +19,7 @@
+ using System.Collections;
+ using System.Collections.Specialized;
+ 
+-namespace ODIPlugin
++namespace OpenDesktop.Plugin
+ {
+     #region class SearchInfo
+     /// <summary>
+
+Modified: trunk/IPlugin/IPlugin.csproj
+===================================================================
+--- trunk/IPlugin/IPlugin.csproj	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/IPlugin/IPlugin.csproj	2006-01-22 11:25:28 UTC (rev 12)
+@@ -2,48 +2,42 @@
+   <PropertyGroup>
+     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+-    <ProductVersion>8.0.50727</ProductVersion>
+     <SchemaVersion>2.0</SchemaVersion>
+-    <ProjectGuid>{99E38044-8BFC-4805-94F9-84C275E3120D}</ProjectGuid>
++    <ProjectGuid>{3668A126-BE07-4692-82C4-B061F1212105}</ProjectGuid>
++    <RootNamespace>IPlugin</RootNamespace>
++    <AssemblyName>IPlugin</AssemblyName>
+     <OutputType>Library</OutputType>
+-    <AppDesignerFolder>Properties</AppDesignerFolder>
+-    <RootNamespace>ODIPlugin</RootNamespace>
+-    <AssemblyName>ODIPlugin</AssemblyName>
++    <WarningLevel>4</WarningLevel>
++    <NoStdLib>False</NoStdLib>
++    <NoConfig>False</NoConfig>
++    <RunPostBuildEvent>OnSuccessfulBuild</RunPostBuildEvent>
+   </PropertyGroup>
+   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+-    <DebugSymbols>true</DebugSymbols>
+-    <DebugType>full</DebugType>
+-    <Optimize>false</Optimize>
+-    <OutputPath>..\OpenDesktop\bin\Debug\</OutputPath>
+-    <DefineConstants>TRACE;DEBUG</DefineConstants>
+-    <ErrorReport>prompt</ErrorReport>
+-    <WarningLevel>4</WarningLevel>
++    <DebugSymbols>True</DebugSymbols>
++    <Optimize>False</Optimize>
++    <AllowUnsafeBlocks>False</AllowUnsafeBlocks>
++    <CheckForOverflowUnderflow>True</CheckForOverflowUnderflow>
++    <OutputPath>bin\Debug\</OutputPath>
++    <TreatWarningsAsErrors>False</TreatWarningsAsErrors>
+   </PropertyGroup>
+   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+-    <DebugType>pdbonly</DebugType>
+-    <Optimize>false</Optimize>
+-    <OutputPath>..\OpenDesktop\bin\Release\</OutputPath>
+-    <DefineConstants>TRACE;DEBUG</DefineConstants>
+-    <ErrorReport>prompt</ErrorReport>
+-    <WarningLevel>4</WarningLevel>
++    <DebugSymbols>False</DebugSymbols>
++    <Optimize>True</Optimize>
++    <AllowUnsafeBlocks>False</AllowUnsafeBlocks>
++    <CheckForOverflowUnderflow>False</CheckForOverflowUnderflow>
++    <OutputPath>bin\Release\</OutputPath>
++    <TreatWarningsAsErrors>False</TreatWarningsAsErrors>
+   </PropertyGroup>
+   <ItemGroup>
+     <Reference Include="System" />
++    <Reference Include="System.Data" />
++    <Reference Include="System.Drawing" />
++    <Reference Include="System.Windows.Forms" />
++    <Reference Include="System.Xml" />
+   </ItemGroup>
+   <ItemGroup>
+-    <Compile Include="ODIPlugin.cs" />
+-    <Compile Include="Properties\AssemblyInfo.cs" />
++    <Compile Include="IPlugin.cs" />
++    <Compile Include="AssemblyInfo.cs" />
+   </ItemGroup>
+-  <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
+-  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+-       Other similar extension points exist, see Microsoft.Common.targets.
+-  <Target Name="BeforeBuild">
+-  </Target>
+-  <Target Name="AfterBuild">
+-  </Target>
+-  -->
+-  <PropertyGroup>
+-    <PostBuildEvent>
+-    </PostBuildEvent>
+-  </PropertyGroup>
++  <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.Targets" />
+ </Project>
+\ No newline at end of file
+
+Added: trunk/OpenDesktop/AssemblyInfo.cs
+===================================================================
+--- trunk/OpenDesktop/AssemblyInfo.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/AssemblyInfo.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -0,0 +1,32 @@
++using System.Reflection;
++using System.Runtime.CompilerServices;
++
++// Information about this assembly is defined by the following
++// attributes.
++//
++// change them to the information which is associated with the assembly
++// you compile.
++
++[assembly: AssemblyTitle("")]
++[assembly: AssemblyDescription("")]
++[assembly: AssemblyConfiguration("")]
++[assembly: AssemblyCompany("")]
++[assembly: AssemblyProduct("")]
++[assembly: AssemblyCopyright("")]
++[assembly: AssemblyTrademark("")]
++[assembly: AssemblyCulture("")]
++
++// The assembly version has following format :
++//
++// Major.Minor.Build.Revision
++//
++// You can specify all values by your own or you can build default build and revision
++// numbers with the '*' character (the default):
++
++[assembly: AssemblyVersion("1.0.*")]
++
++// The following attributes specify the key for the sign of your assembly. See the
++// .NET Framework documentation for more information about signing.
++// This is not required, if you don't want signing let these attributes like they're.
++[assembly: AssemblyDelaySign(false)]
++[assembly: AssemblyKeyFile("")]
+
+Deleted: trunk/OpenDesktop/Config.cs
+===================================================================
+--- trunk/OpenDesktop/Config.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/Config.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -1,55 +0,0 @@
+-// OpenDesktop - A search tool for the Windows desktop
+-// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
+-// http://opendesktop.berlios.de
+-//
+-// This program is free software; you can redistribute it and/or
+-// modify it under the terms of the GNU General Public License
+-// as published by the Free Software Foundation; either version 2
+-// of the License, or (at your option) any later version.
+-//
+-// This program is distributed in the hope that it will be useful,
+-// but WITHOUT ANY WARRANTY; without even the implied warranty of
+-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-// GNU General Public License for more details.
+-//
+-// You should have received a copy of the GNU General Public License
+-// along with this program; if not, write to the Free Software
+-// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+-using System;
+-
+-namespace OpenDesktop
+-{
+-    class Config
+-    {
+-        #region Member vars
+-        private static object m_lock = new object();
+-        private static Config _instance = null;
+-        #endregion
+-
+-        #region Constructor
+-        private Config()
+-        {
+-        }
+-        #endregion
+-
+-        #region Standard Singleton Implementation
+-        public static Config Instance
+-        {
+-            get
+-            {
+-                if (_instance == null)
+-                {
+-                    lock (m_lock)
+-                    {
+-                        if (_instance == null)
+-                        {
+-                            _instance = new Config();
+-                        }
+-                    }
+-                }
+-                return _instance;
+-            }
+-        }
+-        #endregion
+-    }
+-}
+
+Modified: trunk/OpenDesktop/FileExplorer.cs
+===================================================================
+--- trunk/OpenDesktop/FileExplorer.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/FileExplorer.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -21,15 +21,20 @@
+ using System.Threading;
+ using System.Collections;
+ 
+-using ODIPlugin;
++using OpenDesktop.Plugin;
+ 
+ namespace OpenDesktop
+ {
++	#region Public Delegates
+ 	/// <summary>
+ 	/// Public delegate which tells how many documents have been indexed
+ 	/// </summary>
++	/// <param name="filePath">Document currently indexing</param>
+ 	/// <param name="numDocs">number of documents already indexed</param>
+-	public delegate void IndexProgressHandler(int numDocs);
++	public delegate void IndexProgressHandler(string filePath, int numDocs);
++	public delegate void FileExplorerDoneHandler();
++	public delegate void FileExplorerProgressHandler(string filePath);
++	#endregion
+ 
+ 	class FileExplorer : IDisposable
+ 	{
+@@ -40,18 +45,36 @@
+ 		private Hashtable m_htDNV; // Donot visit hashmap
+ 		Indexer m_indexer;
+ 		private int m_iNumDocsDone;
+-		private bool m_bAgressive; // true = dont sleep between documents
++		private bool m_bAgressive = false; // true = dont sleep between documents
+ 		#endregion
+ 
+ 		#region Public Events
+ 		public event IndexProgressHandler IndexProgress;
+-		private void OnIndexProgress(int numDocs)
++		private void OnIndexProgress(string filePath, int numDocs)
+ 		{
+ 			if (IndexProgress != null)
+ 			{
+-				IndexProgress(numDocs);
++				IndexProgress(filePath, numDocs);
+ 			}
+ 		}
++		
++		public event FileExplorerProgressHandler FileExplorerProgress;
++		private void OnFileExplorerProgress(string filePath)
++		{
++			if (FileExplorerProgress != null)
++			{
++				FileExplorerProgress(filePath);
++			}
++		}
++		
++		public event FileExplorerDoneHandler FileExplorerDone;
++		private void OnFileExplorerDone()
++		{
++			if(FileExplorerDone != null)
++			{
++				FileExplorerDone();
++			}
++		}
+ 		#endregion
+ 
+ 		#region Constructor
+@@ -60,7 +83,7 @@
+ 			m_fileFunctionMap = fileFunctionMap;
+ 			_quit = false;
+ 			//TODO: m_htDNV = 
+-			m_indexer = new Indexer(Properties.Settings.Default.NewIndexPath, IndexMode.CREATE);
++			m_indexer = new Indexer(Properties.Settings.Instance.TempIndexPath, IndexMode.CREATE);
+ 		}
+ 
+ 		public void Dispose()
+@@ -77,20 +100,36 @@
+ 		#endregion
+ 
+ 		#region Run/Stop/Pause/Resume
+-		public void Run()
++		/// <summary>
++		/// Starts the FileExploring process
++		/// </summary>
++		/// <param name="aggresive">
++		/// If true, thread priority isnt set to low and there is no delay after
++		/// each file addition
++		/// </param>
++		public void Run(bool aggressive)
+ 		{
+ 			m_iNumDocsDone = 0;
++			
++			m_bAgressive = aggressive;
+ 
+ 			// Check if an update of the index is due
+-			TimeSpan objUpdateFrequency = new TimeSpan(Properties.Settings.Default.IndexUpdateFrequency, 0, 0);
+-			if (DateTime.Now.Subtract(Properties.Settings.Default.IndexLastUpdated) < objUpdateFrequency)
++			TimeSpan objUpdateFrequency = new TimeSpan(Properties.Settings.Instance.IndexUpdateFrequency, 0, 0);
++			if (DateTime.Now.Subtract(Properties.Settings.Instance.IndexLastUpdated) < objUpdateFrequency)
+ 			{
+ 				Logger.Instance.LogDebug("Update time not elapsed. Exiting FileExplorer");
+ 				return;
+ 			}
+ 
+ 			m_objThread = new Thread(new ThreadStart(Explore));
+-			m_objThread.Priority = ThreadPriority.Lowest;
++			if(m_bAgressive)
++			{
++				m_objThread.Priority = ThreadPriority.Normal;
++			}
++			else
++			{
++				m_objThread.Priority = ThreadPriority.Lowest;
++			}
+ 			m_objThread.Name = "FileExplorer";
+ 			try
+ 			{
+@@ -137,14 +176,15 @@
+ 				{
+ 					Logger.Instance.LogDebug("Exploring " + strDrive);
+ 					Explore(strDrive);
++					break; //FIXME: REMOVE THIS. IT IS TEMP FOR DEBUGGING ONLY
+ 				}
+ 			}
+ 
+ 			if (!_quit) // If the exit was natural
+ 			{
+ 				Logger.Instance.LogDebug("Moving index from " +
+-					Properties.Settings.Default.IndexPath + " to " +
+-					Properties.Settings.Default.NewIndexPath);
++					Properties.Settings.Instance.IndexPath + " to " +
++					Properties.Settings.Instance.TempIndexPath);
+ 				// Close index and move it 
+ 				m_indexer.Close(); m_indexer = null;
+ 
+@@ -153,25 +193,31 @@
+ 				Synchronizer.Instance.LockIndex(this);
+ 				try
+ 				{
+-					Directory.Delete(Properties.Settings.Default.IndexPath, true);
+-					Directory.Move(Properties.Settings.Default.NewIndexPath,
+-						Properties.Settings.Default.IndexPath);
+-					Synchronizer.Instance.ReleaseIndex(this);
++					if (Directory.Exists(Properties.Settings.Instance.IndexPath))
++					{
++						Directory.Delete(Properties.Settings.Instance.IndexPath, true);
++					}
++					Directory.Move(Properties.Settings.Instance.TempIndexPath,
++						Properties.Settings.Instance.IndexPath);
+ 
+-					Properties.Settings.Default.IndexLastUpdated = DateTime.Now;
+-					Properties.Settings.Default.Save();
++					Properties.Settings.Instance.IndexLastUpdated = DateTime.Now;
++					Properties.Settings.Instance.Save();
+ 				}
+ 				catch (Exception e)
+ 				{
+ 					Logger.Instance.LogException(e);
+ 				}
++				Synchronizer.Instance.ReleaseIndex(this);
+ 			}
++			OnFileExplorerDone(); // Signal we are done
+ 		}
+ 
+ 		private void Explore(string directory)
+ 		{
+ 			if (_quit)
+ 				return;
++			
++			OnFileExplorerProgress(directory);
+ 
+ 			string[] strDirList;
+ 			string[] strFileList;
+@@ -206,7 +252,7 @@
+ 						if (sInfo != null)
+ 						{
+ 							m_indexer.AddDocument(sInfo);
+-							OnIndexProgress(++m_iNumDocsDone);
++							OnIndexProgress(strFile, ++m_iNumDocsDone);
+ 						}
+ 					}
+ 					catch (Exception e)
+@@ -214,6 +260,9 @@
+ 						Logger.Instance.LogException(e);
+ 					}
+ 				}
++				
++				if(m_bAgressive)
++					Thread.Sleep(100);
+ 			}
+ 			foreach (string strDir in strDirList)
+ 			{
+
+Added: trunk/OpenDesktop/FirstTimeUser.cs
+===================================================================
+--- trunk/OpenDesktop/FirstTimeUser.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/FirstTimeUser.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -0,0 +1,73 @@
++/*
++ * Created by SharpDevelop.
++ * User: pravin
++ * Date: 1/22/2006
++ * Time: 3:11 PM
++ * 
++ * To change this template use Tools | Options | Coding | Edit Standard Headers.
++ */
++
++using System;
++using System.IO;
++using System.Threading;
++
++namespace OpenDesktop
++{
++	/// <summary>
++	/// Description of FirstTimeUser.
++	/// </summary>
++	public class FirstTimeUser
++	{
++		private FileExplorer m_fileExplorer = null;
++		private IndexGeneration m_form = null;
++		private FileExplorerDoneHandler m_dlgtDoneHandler = null;
++		private FileExplorerProgressHandler m_dlgtProgressHandler = null;
++		
++		public FirstTimeUser()
++		{
++		}
++		
++		/// <summary>
++        /// If the user is determined to be a first time user, this function
++        /// generates an initial index. This function blocks until the index
++        /// is generated
++        /// </summary>
++        /// <returns>true means new user found</returns>
++		public bool IsFirstTimeUser()
++		{
++        	if(Directory.Exists(Properties.Settings.Instance.IndexPath))
++        		return false;
++        	
++        	Logger.Instance.LogDebug("First time user. Generating initial index");
++        	
++        	m_form = new IndexGeneration();
++        	m_form.Show();
++        	
++        	m_fileExplorer = new FileExplorer(PluginManager.Instance.RegisteredFileExtensions);
++        	m_fileExplorer.Run(true);
++        	m_dlgtProgressHandler = new FileExplorerProgressHandler(m_form.ShowProgress);
++			m_dlgtDoneHandler = new FileExplorerDoneHandler(FirstTimeDone);
++			m_fileExplorer.FileExplorerProgress += m_dlgtProgressHandler;
++			m_fileExplorer.FileExplorerDone += m_dlgtDoneHandler;
++//			lock(m_firstTimeUserLock)
++//			{
++//        		Monitor.Wait(m_firstTimeUserLock);
++//			}
++
++        	return true;
++        }
++        
++        void FirstTimeDone()
++        {
++//        	lock(m_firstTimeUserLock)
++//        	{
++//        		Monitor.Pulse(m_firstTimeUserLock);
++//        	}
++
++        	m_fileExplorer.FileExplorerProgress -= m_dlgtProgressHandler;
++        	m_fileExplorer.FileExplorerDone -= m_dlgtDoneHandler;
++        	m_form.Dispose(); m_form = null;
++        	m_fileExplorer.Dispose(); m_fileExplorer = null;
++        }
++	}
++}
+
+Added: trunk/OpenDesktop/IndexGeneration.cs
+===================================================================
+--- trunk/OpenDesktop/IndexGeneration.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/IndexGeneration.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -0,0 +1,98 @@
++/*
++ * Created by SharpDevelop.
++ * User: pravin
++ * Date: 1/22/2006
++ * Time: 12:42 PM
++ * 
++ * To change this template use Tools | Options | Coding | Edit Standard Headers.
++ */
++
++using System;
++using System.Drawing;
++using System.Windows.Forms;
++
++namespace OpenDesktop
++{
++	/// <summary>
++	/// Description of IndexGeneration.
++	/// </summary>
++	public class IndexGeneration : System.Windows.Forms.Form
++	{
++		public IndexGeneration()
++		{
++			InitializeComponent();
++			// The following helps other threads call the ShowProgress
++			// function and change the label text
++			Control.CheckForIllegalCrossThreadCalls = false;
++		}
++		
++		#region Windows Forms Designer generated code
++		/// <summary>
++		/// This method is required for Windows Forms designer support.
++		/// Do not change the method contents inside the source code editor. The Forms designer might
++		/// not be able to load this method if it was changed manually.
++		/// </summary>
++		private void InitializeComponent()
++		{
++			System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(IndexGeneration));
++			this.progressBar = new System.Windows.Forms.ProgressBar();
++			this.lblMessage = new System.Windows.Forms.Label();
++			this.lblFilePath = new System.Windows.Forms.Label();
++			this.SuspendLayout();
++			// 
++			// progressBar
++			// 
++			this.progressBar.Location = new System.Drawing.Point(12, 97);
++			this.progressBar.Name = "progressBar";
++			this.progressBar.Size = new System.Drawing.Size(268, 20);
++			this.progressBar.Style = System.Windows.Forms.ProgressBarStyle.Marquee;
++			this.progressBar.TabIndex = 0;
++			// 
++			// lblMessage
++			// 
++			this.lblMessage.Location = new System.Drawing.Point(12, 9);
++			this.lblMessage.Name = "lblMessage";
++			this.lblMessage.Size = new System.Drawing.Size(268, 41);
++			this.lblMessage.TabIndex = 1;
++			this.lblMessage.Text = "Generating Index for the first time. This  process may take a few minutes";
++			// 
++			// lblFilePath
++			// 
++			this.lblFilePath.Location = new System.Drawing.Point(12, 50);
++			this.lblFilePath.Name = "lblFilePath";
++			this.lblFilePath.Size = new System.Drawing.Size(268, 44);
++			this.lblFilePath.TabIndex = 2;
++			// 
++			// IndexGeneration
++			// 
++			this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
++			this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
++			this.ClientSize = new System.Drawing.Size(292, 129);
++			this.Controls.Add(this.lblFilePath);
++			this.Controls.Add(this.lblMessage);
++			this.Controls.Add(this.progressBar);
++			this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedSingle;
++			this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
++			this.MaximizeBox = false;
++			this.Name = "IndexGeneration";
++			this.Text = "Generating Index ";
++			this.ResumeLayout(false);
++		}
++		private System.Windows.Forms.Label lblMessage;
++		private System.Windows.Forms.Label lblFilePath;
++		private System.Windows.Forms.ProgressBar progressBar;
++		#endregion
++		
++		public void ShowProgress(string currentFile)
++		{
++			this.lblFilePath.Text = currentFile;
++		}
++		
++		public void Dispose()
++		{
++			this.Hide();
++			this.Close();
++			base.Dispose();
++		}
++	}
++}
+
+Added: trunk/OpenDesktop/IndexGeneration.resx
+===================================================================
+--- trunk/OpenDesktop/IndexGeneration.resx	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/IndexGeneration.resx	2006-01-22 11:25:28 UTC (rev 12)
+@@ -0,0 +1,546 @@
++?<?xml version="1.0" encoding="utf-8"?>
++<root>
++  <!-- 
++    Microsoft ResX Schema 
++    
++    Version 2.0
++    
++    The primary goals of this format is to allow a simple XML format 
++    that is mostly human readable. The generation and parsing of the 
++    various data types are done through the TypeConverter classes 
++    associated with the data types.
++    
++    Example:
++    
++    ... ado.net/XML headers & schema ...
++    <resheader name="resmimetype">text/microsoft-resx</resheader>
++    <resheader name="version">2.0</resheader>
++    <resheader name="reader">System.Resources.ResXResourceReader, System.Windows.Forms, ...</resheader>
++    <resheader name="writer">System.Resources.ResXResourceWriter, System.Windows.Forms, ...</resheader>
++    <data name="Name1"><value>this is my long string</value><comment>this is a comment</comment></data>
++    <data name="Color1" type="System.Drawing.Color, System.Drawing">Blue</data>
++    <data name="Bitmap1" mimetype="application/x-microsoft.net.object.binary.base64">
++        <value>[base64 mime encoded serialized .NET Framework object]</value>
++    </data>
++    <data name="Icon1" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
++        <value>[base64 mime encoded string representing a byte array form of the .NET Framework object]</value>
++        <comment>This is a comment</comment>
++    </data>
++                
++    There are any number of "resheader" rows that contain simple 
++    name/value pairs.
++    
++    Each data row contains a name, and value. The row also contains a 
++    type or mimetype. Type corresponds to a .NET class that support 
++    text/value conversion through the TypeConverter architecture. 
++    Classes that don't support this are serialized and stored with the 
++    mimetype set.
++    
++    The mimetype is used for serialized objects, and tells the 
++    ResXResourceReader how to depersist the object. This is currently not 
++    extensible. For a given mimetype the value must be set accordingly:
++    
++    Note - application/x-microsoft.net.object.binary.base64 is the format 
++    that the ResXResourceWriter will generate, however the reader can 
++    read any of the formats listed below.
++    
++    mimetype: application/x-microsoft.net.object.binary.base64
++    value   : The object must be serialized with 
++            : System.Runtime.Serialization.Formatters.Binary.BinaryFormatter
++            : and then encoded with base64 encoding.
++    
++    mimetype: application/x-microsoft.net.object.soap.base64
++    value   : The object must be serialized with 
++            : System.Runtime.Serialization.Formatters.Soap.SoapFormatter
++            : and then encoded with base64 encoding.
++
++    mimetype: application/x-microsoft.net.object.bytearray.base64
++    value   : The object must be serialized into a byte array 
++            : using a System.ComponentModel.TypeConverter
++            : and then encoded with base64 encoding.
++    -->
++  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
++    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
++    <xsd:element name="root" msdata:IsDataSet="true">
++      <xsd:complexType>
++        <xsd:choice maxOccurs="unbounded">
++          <xsd:element name="metadata">
++            <xsd:complexType>
++              <xsd:sequence>
++                <xsd:element name="value" type="xsd:string" minOccurs="0" />
++              </xsd:sequence>
++              <xsd:attribute name="name" use="required" type="xsd:string" />
++              <xsd:attribute name="type" type="xsd:string" />
++              <xsd:attribute name="mimetype" type="xsd:string" />
++              <xsd:attribute ref="xml:space" />
++            </xsd:complexType>
++          </xsd:element>
++          <xsd:element name="assembly">
++            <xsd:complexType>
++              <xsd:attribute name="alias" type="xsd:string" />
++              <xsd:attribute name="name" type="xsd:string" />
++            </xsd:complexType>
++          </xsd:element>
++          <xsd:element name="data">
++            <xsd:complexType>
++              <xsd:sequence>
++                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
++                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
++              </xsd:sequence>
++              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
++              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
++              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
++              <xsd:attribute ref="xml:space" />
++            </xsd:complexType>
++          </xsd:element>
++          <xsd:element name="resheader">
++            <xsd:complexType>
++              <xsd:sequence>
++                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
++              </xsd:sequence>
++              <xsd:attribute name="name" type="xsd:string" use="required" />
++            </xsd:complexType>
++          </xsd:element>
++        </xsd:choice>
++      </xsd:complexType>
++    </xsd:element>
++  </xsd:schema>
++  <resheader name="resmimetype">
++    <value>text/microsoft-resx</value>
++  </resheader>
++  <resheader name="version">
++    <value>2.0</value>
++  </resheader>
++  <resheader name="reader">
++    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
++  </resheader>
++  <resheader name="writer">
++    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
++  </resheader>
++  <assembly alias="System.Drawing" name="System.Drawing, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a" />
++  <data name="$this.Icon" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
++    <value>
++        AAABAAkAMDAQAAEABABoBgAAlgAAACAgEAABAAQA6AIAAP4GAAAQEBAAAQAEACgBAADmCQAAMDAAAAEA
++        CACoDgAADgsAACAgAAABAAgAqAgAALYZAAAQEAAAAQAIAGgFAABeIgAAMDAAAAEAIACoJQAAxicAACAg
++        AAABACAAqBAAAG5NAAAQEAAAAQAgAGgEAAAWXgAAKAAAADAAAABgAAAAAQAEAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAD/AAAA//8AAICAAAAA//8AAICAAP///wDAwMAAgICAAAAAAAD///8AAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAJmZmQAAAAAAAAAAAAAAAAAAAAAAAAAAmTIYGJmQAAAAAAAAAAAAAAAAAAAAAACZNyeB
++        gYGJkAAAAAAAAAAAAAAAAAAAAJlycnIYGBgYGZkAAAAAAAAAAAAAAAAAmScnJyeBgYGBgYGZAAAAAAAA
++        AAAAAACZcnJycnIYGBgYGBgYmZAAAAAAAAAAAJknJycnJyeBgYGBgYGBhVmQAAAAAAAAmXJycnJycnIY
++        GBgYGBgYhHVZkAAAAAAAhycnJycnJyeBgYGBgYGBh0dHWZkAAAAAgnJycnJycnIYGBgYGBgYhHR0dFWZ
++        AAAAhycnJycnJyeBgYGBgYGBh0dHR0dZAAAAgnJycnJycnIYGBgYhYgYhHR0dHR5AAAAhycnJycnJyeB
++        gYGBh0dYh0dHR0dJAAAAgnJycnJycnIYGBgYhHR0VHR0dHR5AAAAhycnJycnJyeBgYGBh0dHR0dHR0dJ
++        AAAAgnJycnJycnIYGBgYhHR0dHR0dHR5AAAAhycnJycnJyeBgYGBh0dHR0dHR0dJAAAAgnJycnJycnIY
++        GBgYhHR0dHR0dHR5AAAAhycnJycnJyeBgYGBh0dHR0dHR0dJAAAAgnJycnJycnIYGBgYhHR0dHR0dHR5
++        AAAAhycnJycnJyeBgYGBh0dHR0dHR0dJAAAAgnJycnJycnIYGBgYhHR0dHR0dHR5AAAAhycnJycnJyeB
++        gYGBh0dHR0dHR0dJAAAAgnJycnJycnIYGBgYhHR0dHR0dHR5AAAAhycnJycnJyeBgYGBhUdHR0dHR0dJ
++        AAAAgnJycnJycnIYGBgYGBhUdHR0dHR5AAAAhycnJycnJyeBgYGBgYGIV0dHR0dJAAAAgnJycnJycnIY
++        GBgYGBgYhHR0dHR5AAAAhycnJycnJyeBgYGBgYGBh0dHR0dJAAAAgnJycnJyd3YoGBgYGBgYhHR0dHR5
++        AAAAhycnJycnImJiYYGBgYGBh0dHR0dJAAAAgnJycnd2JiYmJiYYGBgYhHR0dHR5AAAAhycnd2JiYmJi
++        YmJiYYGBh0dHR0dJAAAAgnJ3JiYmJiYmJiYmJiYYhHR0dHR5AAAAh3diYmJiYmJiYmJiYmJoVVVHR0dJ
++        AAAAhyYmJiYmJiYmJiYmJihUREVVVHR5AAAAiIJiYmJiYmJiYmJiiFREREREVVVJAAAAAAiIJiYmJiYm
++        JiaIREREREREREWAAAAAAAAAiGJiYmJiYohERERERERERIgAAAAAAAAAAIiGJiYmhUREREREREREiAAA
++        AAAAAAAAAAAIiGKFZGRkZGRkZGSIAAAAAAAAAAAAAAAAAIh2RkZGRkZGRogAAAAAAAAAAAAAAAAAAACI
++        ZGRkZGRkiAAAAAAAAAAAAAAAAAAAAAAAiIZGRkaIAAAAAAAAAAAAAAAAAAAAAAAAAAiEZIgAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAIiAAAAAAAAAAAAAD///////8AAP///////wAA//8D////AAD//AB///8AAP/w
++        AB///wAA/8AAA///AAD/AAAA//8AAPwAAAAf/wAA8AAAAAf/AADAAAAAAf8AAMAAAAAAPwAAwAAAAAAP
++        AADAAAAAAA8AAMAAAAAADwAAwAAAAAAPAADAAAAAAA8AAMAAAAAADwAAwAAAAAAPAADAAAAAAA8AAMAA
++        AAAADwAAwAAAAAAPAADAAAAAAA8AAMAAAAAADwAAwAAAAAAPAADAAAAAAA8AAMAAAAAADwAAwAAAAAAP
++        AADAAAAAAA8AAMAAAAAADwAAwAAAAAAPAADAAAAAAA8AAMAAAAAADwAAwAAAAAAPAADAAAAAAA8AAMAA
++        AAAADwAAwAAAAAAPAADAAAAAAA8AAMAAAAAADwAAwAAAAAAPAAD4AAAAAB8AAP8AAAAAPwAA/8AAAAD/
++        AAD/+AAAA/8AAP//AAAP/wAA///AAD//AAD///AA//8AAP///gP//wAA////j///AAAoAAAAIAAAAEAA
++        AAABAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8AAAD//wAAAP//AACAgAD///8AwMDAAICA
++        gAAAAAAA////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAiIgAAA
++        AAAAAAAAAAAAAAiGcXiAAAAAAAAAAAAAAAiCYhcXGIgAAAAAAAAAAAiGJiZxcXFxiAAAAAAAAAiCYmJi
++        FxcXFxeIgAAAAAiGJiYmJnFxcXF3Y2iAAAAHYmJiYmIXFxcXFzY2OIAAByYmJiYmcXF3cXdjY2OAAAdi
++        YmJiYhcXFzd3NjY2gAAHJiYmJiZxcXdjY2NjY4AAB2JiYmJiFxcXNjY2NjaAAAcmJiYmJnFxd2NjY2Nj
++        gAAHYmJiYmIXFxc2NjY2NoAAByYmJiYmcXF3Y2NjY2OAAAdiYmJiYhcXFzY2NjY2gAAHJiYmJiZxcXdj
++        Y2NjY4AAB2JiYmJiFxcXRjY2NjaAAAcmJiYmJnFxcXdzY2NjgAAHYmJiYmIXFxcXFjY2NoAAByYmJiYm
++        YXFxcXNjY2OAAAdiYmJmJSUXFxcWNjY2gAAHJiYmUlJSUlFxc2NjY4AAB2JmJSUlJSUlJRRGNjaAAAdm
++        UlJSUlJSUlc1ZEdGgAAAd3UlJSUlJSdTU1NWZ4AAAAAHclJSUlc1NTU1NXcAAAAAAAd3JSdTU1NTU3cA
++        AAAAAAAAAHc1NTU1NXcAAAAAAAAAAAAAd1NTU3cAAAAAAAAAAAAAAAB3d3cAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAA///////h////gH///gAP//gAA//gAAB/gAAAH4AAAAeAAAAHgAAAB4AAAAeAAAAHgAAAB4AA
++        AAeAAAAHgAAAB4AAAAeAAAAHgAAAB4AAAAeAAAAHgAAAB4AAAAeAAAAHgAAAB8AAAAf4AAAP/gAAP//A
++        AP//8AP///wP//////8oAAAAEAAAACAAAAABAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8A
++        AAD//wAAAP//AACAgAD///8AwMDAAICAgAAAAAAA////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAACIiIAAAAAAiCcXGIgAAAhiYXFxRIgAhiYnF3dGNoByYmFxRENjgHYmJxdGNjaAcmJhcUNj
++        Y4B2JicXRjY2gHJiYXFEQ2OAdiYnFxdGNoByZmJRcUNjgHYlJSUnRGaAB3JSVkNTRwAAB3dFNTdwAAAA
++        AHd3cAAA//8mJvB/cXHAD3djgAOAAAABYmIAARcXAAF3NgABgAAAASYmAAFxcQABY2MAAYAAAAFiYoAD
++        FxfgBzY2/B+AACgAAAAwAAAAYAAAAAEACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/+bRAP/s
++        3AD/7d4A//LnAP+JHgD/ih8A/4kgAP+MIgD0hiIA/44nAP+QKgD/jyoA/5AtAP+SLwD/kzAA/5QzAP+U
++        NAD/ljcA138vAP6XOQD/mT0A/5tAAP+cQQD/m0IA/55FAP+fRwD/oEkAv3g3AP+iTgD/o1EA/6VRAP+k
++        UgD/plUA/6dYAP+pWgD/ql4A/6tgAP+tYwD/rmUA/7BpAP+xawD/sm0A/7RwAP+1cgD/tnQA/7d2AP+4
++        dwD/t3gA/7l6AP+7fQD/vYIA/7+FAP/AhwD/wIkA/8OLAP/DjQD/xY8A/8aTAP/IlgD/ypkA/8ucAP/N
++        nwD/z6MA/9ClAP/RqAD/0qkA/9OqAP/TrAD/1K4A/9axAP/YtAD/2rkA/9u6AP/dvgD/38IA/+HFAP/i
++        yAD/48oA/+XOAP/q2AD/7+EA//buAPuKHwDxiCAA/5QuAPGbRAD/pU4A+KZXAP+sXgD+sGYA76dhAP69
++        fwD/w4gA/8iSAP/atwD/3LkA/+DCAJKEdgD/6dQA/+7eAOWHIACyez4A155iANiGIADpqF4A2ZQ3ALWH
++        SACASwEAh1EDAIlTBACJVAYAj1cHAJFZCACPWQgAlF0KAJhfDACaYQ0AoGYQAKJoEQCpbRQAzIUhAMuF
++        IQDEgyEAz4wpAL6BLADJijIAwY1EAKRtFgCxdRkAu30eALJ4HwDLiiUA05EqANaTKwDali0AuYEmAN2Y
++        LgDinTAA5qEyAOSfMQDfnTEA66U1AO2nNgD0rDkA7qg3AP2zPQDOlDwAj4FqAMCIJADNkSkA15guAKh4
++        KACNai0Adl83AKyRYwCJdlQAYFVBAHpsUwCdjG8AVlVTAPz7+QCHlI8AHs//ACrS/wA20v8ARdf/AGDb
++        /wBo3/8AcuH/AI3n/wCa6v8Apev/ALPu/wB94f8AxvL/ANj2/wAYxf8ALsf/AC/I/wATu/8AJr//ACfA
++        /wAqw/8AK8T/AOb4/wARuP8AH7j/ACG6/wAjvP8AJb7/AL3q/wALrP8AEq7/ABav/wAZsv8AG7T/AB22
++        /wAiuP8AK7r/ADvA/wAOp/8AEKn/ABKr/wAUrf8AJbT/AI/Y/wAFnv8AB6D/AAmi/wALpP8ADab/ABun
++        /wAfofEAI5njACyt/wA2s/8AM5TQAFu//gAAmP8AApr/AAOc/wAEmv8ADpz9ABCX8QARoP8AHZ/1ACCl
++        /wAkoPMAMKLvAFG09gBwxf8AZo6oAAOW/wAKlf8AEpz/ACOg/wAlov8AJ6T/ACmm/wAZlv8AHpj/ACGc
++        /wAQjf8AFpH/ACKD9wBVa4UAMHjXADRelQA9VXUARV19AElbcwBFUWEATVNbAGdnZwD///8AAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGJmiJqg/gAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABiZgkGepeImZ2g+gAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAYhwJBgYGepKSi5aYmqD+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAGIcBgYGBgYGepCQkJCRl4iZnaD+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABiHAYGBgYGBgUF
++        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
++        SQD/oUsA/6JPAP+jUAD/pFIA/6ZVAPukVAD/p1kA/6pdAP+sXwD/q2AA/apfAPqpXwD/rGIA/65lAPqq
++        YwD/sGgA+q1nAP+xagD6r2oA/rFtAP+0bgD/s28A/7ZzAPqycQD/t3YA/LV1AP+4eAD/uXoA+rd5AP+6
++        fAD6uX4A/72DAP+/hAD6uoIAqX9ZAP/AhwD6vIQA7bN+AP/CigD6v4kA/8SQAP/GkgD/x5UA/8qZAP/L
++        nAD/zJ8A/86iAP/TrAD/1rEA/92+AP/fwQD/4cUA/+LJAP/lzgD/59IA9IYdAPKHIAD1iiMA9Y8uAPaV
++        OQD2nEQA9qJPAPSjUAD/qVcA96dZAPetZAD/s2oA+bFtAPq2dgD/vX8A+L2BAP/FjgD6xZEA/8mVAPrL
++        nQD+0aUA/9OpAP/VqgD/1q0A/dm1AP/buQD52bkA/+TKAP/s2gDdghsA7I0nAPquXAD2uHUA/+rUAM2w
++        jwCXVwAAjFIFAMmFKQDYkzgAxog3AKiJYgCbiHAAg00BAIlTAwCJUwQAnF8GAItUBQCPVwcAml4JAJJa
++        CQCpaQsAr20OAJlhDQC2dBMApGkSALt5FgCqbRUAs3UZAN2TJADEgyEAt3snAH5oSACNWAUAn2UNAOSU
++        GwCvcxcAvH0cAOOZKADRjyUAzoslAOygLADUkSoA2ZYsAN6aLwDloDIA454xAMyOLADspjYA7qg3APSt
++        OgD/tT8At4MvAOKgMQCNay8AeGA2AGdZQABdVkkA+/z5AI2TkACms64A4vr/ALXw/wAi0v8APNb/AFfc
++        /wBu4P8Akef/AHibpQDO9f8AGcf/ABS//wAjxf8AKsb/AC7I/wA3zf8AaX2EAB/A/wAlv/8AKcH/AHGi
++        tgCk5P8AE7b9ABy7/wAgu/8AILn/ACO9/wAmu/8APbHnAHCTogAIq/8AEa7/ABOu/wAWr/8AGLP/ABq1
++        /wAas/8AHbb/AD+q3QAGpf8AD6r/ABOs/wAmsf8AK7b/ADe1+AB1jZoAAZ7/AASd/wAIof8AC6X/AA2m
++        /wAfqf8AI6z/AEq08wBZufIAdMj9AG6GlQAAmf8AAJb/AAGb/wACmv8AGqP/ADWl7wBpvPQAh8r3AGBu
++        dwAIlf8ADZb/ABSc/gAJkf8AHJPyACOc/gBPkMcALIbWADV3tQBVc5AAO1Z3ADZahwBHXXsASmB9AEhb
++        dQBOVmAAR1FfAHV1dQBlZWUAWFhYAP///wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAqP3+/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAeRNRl6Gkpv0AAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAeBMHB1CboJ2co6X+/AAAAAAAAAAAAAAAAAAAAAAAeBMHBwcFUJmfn5+emaGkpv0AAAAA
++        AAAAAAAAAAAAOxMGBgYGBwlSmJ6dnZ2dnqKU6vX+/AAAAAAAAAAAABAHCQgKCwwMDVOXmpqampubmpax
++        3PL2+vwAAAAAAAAeCwwNDQ4PERIUVJSZmZmZk5OZk7G1t9Ty8/v9AAAAACQREhQUFRYXGBlVlZiYmHZ4
++        eIqQxrq2tra88PkAAAAAJxYXGBkaGxwdH1aVl5eXdtbm8XnGwLy8vLbT9wAAAAApHB0dHyAgIiYmWYuV
++        lZx31sC63PDEu7u7u933AAAAACkgJSUmKiosLi9ai4uLdXfWzMO7u8PDw8PD3fcAAAAAKyotLi8xMzM2
++        XlySkouLoeHLwcLCwsLCwsHc9wAAAABcMTQ2Xjg5OTxgcJKSkpKM4crOzs7Ozs7Oztz3AAAAADA4PDw/
++        QUJCQkRfh5GJiYm5yczNzc3Nzc3M5vcAAAAAMEFDQ0RFRkZGZGGFiIiIg7nRysrKysrKysrm9wAAAAAy
++        RUdHR2RlSEhJY4WGhoaCucfIydLS0tLSyO33AAAAAF1lSElJSWhpaUpkg4SPj4+N8u3a0dHR0dHR7fcA
++        AAAANWhpSkpKS0xMa2iDgYSEhH2AjfTv29vb29vt9wAAAAA3S0xNa2tOTnEBaIJ+f4GBgYFzc/PQ2tra
++        2u33AAAAADdOT3FsbAEBTjgSbYmEe3t8fn5089DZ2dnZ7PcAAAAAOmwBAQECTDQIBAYICm51iI56enrz
++        19jY2Njs9wAAAAA9AqcCTSgLAwoOEhYZGh1XdoyBevPX5eXl5O73AAAAAECnSigNDxUcWCAlWy80Njk/
++        Ym918uPj4uLi7vcAAAAALCAXGiEqLTFePD9gREdlZmQ+qM+0tNDi4+Pu+AAAAAAAFxcoP0JCRWRnaGlL
++        a2RyscW4ra2srLO/0Ov4AAAAAAAAAAAjLmVLT3FscWpyvd+vr6+urq2trKy/5wAAAAAAAAAAAAAAMjJD
++        bGmpveC+q7CwsK+vrq3O3gAAAAAAAAAAAAAAAAAAAAAyqemqp7Krq76wsK/V3wAAAAAAAAAAAAAAAAAA
++        AAAAAAAA6eC+qqqysrDe6AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAN/o4L7f6QAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA///////h////gH///gAP//gAA//gAAB/wAAAH4AA
++        AAeAAAAHgAAAB4AAAAeAAAAHgAAAB4AAAAeAAAAHgAAAB4AAAAeAAAAHgAAAB4AAAAeAAAAHgAAAB4AA
++        AAeAAAAHgAAAB8AAAAf4AAAP/gAAP//AAP//8AP///wP//////8oAAAAEAAAACAAAAABAAgAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/cvwD/+fQA/oYcAP+LIQD/jCQA/40mAP+MJwD/kCoA/pEuAP6S
++        LwD+kjAA/pMwAP6TMQD+lDIA/ZQyAP+VNAD9ljcA/5c4AP6YOQDPey8A/5k9AN2HOQD/nEQA/Z5GAP+j
++        UAD/pVIA/6VTAP+nWQD/rGEA/61hAP+ybAD/s24A/7VyAP+6egD/unsA/rt+AP+/hgD/wIcA/8KLAKaE
++        ZgD/zaAA/82hAKOFaQD/0KUA/9axAP/ZuAD/2rgA/9u8AP/q1wD/7NsA/+7fAPiYOQD5pVYA/7JpAPGp
++        ZQDopWQA/8eOAP/JlQD/3bwA4JVDAP/EhQD+ypMA/+LDAP/q1ACPTgAA7JImAOiRKgDklDMA1ow3AOGX
++        PACgdD4AnFwFAItWEgC3dR0Aw4AsANCMMQDdmUQA2ptLANeeVgDRo2QAklcAAIpUAwCcYQsAr3EbAKNq
++        GgC9i0YApGYIALJyDwDBgBkAz4whAPCkLADZlyoA2ZgvAO2mNQDbmDEA56U0AO+sOQDEjjIAi2s0ALOQ
++        VQBiV0MAkY2GAHRiQABrYUwAV1VQAIGMiwCY5PcAJtH/ADnL8wCI5v4AiJKVACLD/wAkxP8AKMf/ABW7
++        /wAivv8AC7L/ABa2/wAct/8AIrv/AA6r/AATr/8AFLD/ABu0/wAbtf8ANrj6AASm/wANqf8ADar/ABWt
++        /wAhsv8AAJ7/AAKf/wAIpP8AOpfOAACY/wACnP8AFZz1ABSb8wAeofYAI4TIAC2o9wArlNoAaKnWACKM
++        2wAsg8oAMY7YAD94pgAqfcUAK3zDACp1ugArd70AK3i8ACp0uQArdbkALXm8ACx1uAAveLgAM3awADZ6
++        uAA3ebUALHK4ACxzuAA5XYEAP2CGAFNWWgB6enoAcXFxAF1dXQD///8AAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK0dnaagAAAAAAAAAAAAoFANC
++        YWJjZamoAAAAAAAWBAUHQ2BeW12UpKanAAAKEBIVF0RcX2RWnnCPpagACRkbHB1GWkyclpJxcp2oAAof
++        ICEjTVlLm3ODeHSjqAAKJSYnOk5YSph2fXx3o6gACyopLC1PV1WZdXqCe6OoAAwwLwFAUFFTn5WRgIGj
++        qAANMTIzOzxIUkFol3+Go6gADgIuHgYINEVUSZqEiaKoABMgGho2Ijk9N2qNhYiiqAAADxEkPz44ZqGH
++        bWx5kwAAAAAAGDVvoJBrbn6LiwAAAAAAAAAAAIuMjoqLAAAAAAD//xES8H8VFsAPGVWAA5iYAAF4igAB
++        urYAAbzwAAEAAAABFhcAARobAAEfVgABl5cAAebxgAPAvOAHttP8HwAAKAAAADAAAABgAAAAAQAgAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAwAAAATAAAACQAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAANAAAAKAAAAF0AAAB6AAAATwAA
++        AB8AAAAPAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAADwAAACgmFQVqoVcUy7Zz
++        G/FTOw/VAAAArwAAAJgAAABuAAAAOQAAABgAAAAJAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAABIAAAAxJBMEcaBX
++        E8z0hB76/4of/8uFIf/YmS7/uYQj+4BaF+ctIAjEAAAApwAAAIYAAABRAAAAJQAAABAAAAAEAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAASAAAAM0Aj
++        CICqXBXW9IQe+v+KH///ih///4of/8uFIf/9sz3//bM9/+ejNP/MkSn/nW8c81M7D9URDAO0AAAAmgAA
++        AG4AAAA5AAAAGQAAAAoAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAEgAA
++        ADNAIwiAuGQW3P+KH///ih///4of//+KH///ih///4of/8uFIf/1rTr/9a06//WtOv/1rTr/7qg3/9eY
++        Lv+4gyL7gFoX5y0gCMQAAACpAAAAjgAAAFgAAAAoAAAAEAAAAAYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAA
++        ABUAAAAzQCMIgLhkFtz/ih///4of//+KH///ih///4of//+KH///iR7//4ke/8uFIf/zrDn/86w5//Os
++        Of/zrDn/86w5//OsOf/zrDn/4J4x/86RKf+ndh73YEQR2RALA7cAAACgAAAAcQAAAD8AAAAbAAAACQAA
++        AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAYAAAAYAAAAQjofB423Yxbd/4of//+KH///iR7//4ke//+JHv//iR7//4ke//+JHv//iR7//4ke/8uF
++        If/tpzb/7ac2/+2nNv/tqDf/7qc3/+6nNv/tpzb/7ac2/+2nNv/qpTX/1pct/8CIJP+AWhfnOyoLyAAA
++        AKoAAACMAAAAUgAAACUAAAAPAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAADAAAAEJnOA2e0XEZ6f+KH///iR7//4ke//+JHv//iR7//4ke//+JHv//iR7//4si//+M
++        JP//jif//5Ar/8uFIf/rpTX/66U1/+ulNf/rpTX/66U1/+ulNf/rpTX/66U1/+ulNf/rpTX/66U1/+ul
++        Nf/enDD/oYxe/xxz5vcOOnPVAwwXtAAAAJgAAABnAAAAMQAAABMAAAAGAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAGnVUTaNRzGub/ih///4ke//+JHv//iR7//4sh//+MI///jif//48q//+Q
++        LP//ki///5Iv//+SL///ki///5Iv/8uFIf/knzH/5J8x/+WfMf/moDL/5qAy/+ahMf/loDH/5J8x/+Sf
++        Mf/knzH/5J8x/+SfMf/knzH/s5dl/yeh//8ppv//IITz+xRRoeIFFiu+AAAAowAAAHcAAABAAAAAGwAA
++        AAkAAAABAAAAAAAAAAAAAAAAAAAAAAAAAADwgh1E/4og//+LIv//jif//48p//+QK///ki///5Iv//+S
++        L///ki///5Iv//+SL///ki///5My//+UNP//lzj//5g6/8uFIf/inTD/4p0w/+KdMP/inTD/4p0w/+Kd
++        MP/inTD/4p0w/+KdMP/inTD/4p0w/+KdMP/inTD/sZZk/yek//8vyP//L8j//yis//8jkv//F1++6wop
++        UcoAAACqAAAAjAAAAFIAAAAlAAAABgAAAAAAAAAAAAAAAAAAAADwgh1E/44n//+SL///ki///5Iv//+S
++        L///ki///5Mv//+UM///ljb//5c5//+ZPP//mj///5tA//+bQP//m0D//5tA/8uFIf/cmC3/3Jgt/96Z
++        Lv/emS7/3pgu/96ZLv/cmTD/3Jgu/9yYLf/cmC3/3Jgt/9yYLf/cmC3/rZJi/yek//8ux///Lsf//y7H
++        //8ux///K7r//yWb//8cc+b3Djpz1QMMF7QAAACPAAAALgAAAAQAAAAAAAAAAAAAAADwgh1E/44n//+U
++        Mv//lTT//5c4//+ZPP//mj7//5tA//+bQP//m0D//5tA//+bQf//m0L//55F//+dRv//n0j//6BJ/8uF
++        If/aliz/2pYs/9qWLP/aliz/2pYu/9qWMP/YljT/zpU+/8+VOf/aliz/2pYs/9qWLP/aliz/q5Fh/yWi
++        //8rxP//K8T//yvE//8rxP//K8T//yvE//8qwP//JaL//x6D8/sIIUG8AAAAOgAAAAYAAAAAAAAAAAAA
++        AADwgh1E/5Mw//+bQP//m0D//5tA//+bQP//m0D//5tA//+dRP//nkf//6BJ//+hTP//ok///6RS//+k
++        Uv//pFL//6RS/8uFIf/TkSn/1JMp/9aTKv/Wkyv/1pMt/9aTM//Okj3/po5k/yCB//9jhq//sY5R/9OR
++        Kf/TkSn/po1f/yWi//8qw///KsP//yrD//8qw///KsP//yrD//8qw///KsP//yWi//8KKlTCAAAAPAAA
++        AAYAAAAAAAAAAAAAAADwgh1E/5Mw//+cQf//nkX//59I//+gSv//ok7//6RR//+kUv//pFL//6RS//+l
++        U///pVX//6dV//+nWP//plj//qhZ/8uFIf/TkSn/05Ep/9ORKf/TkSn/05Et/9ORM//GkUT/oI5t/yOg
++        //8lsP//IZT//0GD1/+Qi3n/po1f/yOg//8nwP//J8D//yfA//8nwP//J8D//yfA//8nwP//J8D//yOg
++        //8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/5c5//+kUv//pFL//6RS//+kUv//pFL//6ZU//+n
++        WP//qFj//6ha//+pXP//q1///6xi//+tY///rWP//qxh/8yFIf/LiiX/zosm/86NJ//PjSj/z40r/82N
++        Mv/AjUT/mYtv/yOg//8mv///Jr///yW3//8inP//H4T//yOg//8mv///Jr///ya///8mv///Jr///ya/
++        //8mv///Jr///yOg//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/5c5//+kUv//pVf//6hZ//+p
++        W///ql7//6tg//+tY///rWP//61j//+tZP//rmb//7Bo//+waf//r2j//bBm/8uFIf/LiiX/y4ol/8uK
++        Jf/LiiX/y4on/8qKMv+9ikP/mIts/yKf//8lvv//Jb7//yW+//8lvv//Jb7//yS2//8lvv//Jb7//yW+
++        //8lvv//Jb7//yW+//8lvv//Jb7//yKf//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/5o///+t
++        Y///rWP//61j//+tY///rmX//69l//+waf//sWv//7Fr//+ybP//s27//7Rw//+2c///tnT//bVy/8uF
++        If/CgiD/w4Qi/8aFIv/GhiL/xoYm/8SGMf+5hET/k4Rw/yGe//8jvP//I7z//yO8//8jvP//I7z//yO8
++        //8jvP//I7z//yO8//8jvP//I7z//yO8//8jvP//I7z//yGe//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAA
++        AADwgh1E/5xB//+tY///sGX//7Fp//+xa///sm3//7Rw//+1c///tnT//7Z0//+2dP//t3X//7h4//+5
++        ef//uHf//rd2/8uFIf/CgiD/woIg/8KCIP/CgiD/woIi/8CCLf+1gkP/koRs/yGd//8huv//Ibr//yG6
++        //8huv//Ibr//yG6//8huv//Ibr//yG6//8huv//Ibr//yG6//8huv//Ibr//yCd//8KKlTCAAAAPAAA
++        AAYAAAAAAAAAAAAAAADwgh1E/59H//+1cv//tnT//7Z0//+2dP//tnX//7d3//+5ev//unz//7p8//+6
++        fP//u33//72B//++g///v4X//r1//8uFIf+6fB3/vH4e/71/Hv+9fh7/vX4f/7t/Kv+xfzz/jYFq/x+c
++        //8fuP//H7j//x+4//8fuP//H7j//x+4//8fuP//H7j//x+4//8fuP//H7j//x+4//8fuP//H7j//x+c
++        //8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/6BK//+2dP//t3j//7l7//+6fP//u33//7x///+9
++        gv//v4X//7+F//+/hf//v4X//8CG///CiP//woj//L5//8uFIf+6fB3/unwd/7p8Hf+6fB3/unwd/7h8
++        Jv+ufDf/jX5p/x+b//8dtv//Hbb//x22//8dtv//Hbb//x22//8dtv//Hbb//x22//8dtv//Hbb//x22
++        //8dtv//Hbb//x6b//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/6NP//+9gf//voT//7+F//+/
++        hf//v4X//8CH///Biv//woz//8ON///Djf//w47//8SP///Gk///yJX//MOM/8uFIf+xdBj/sXUY/7J0
++        Gf+ydRj/s3YZ/7R3H/+seCz/intc/x6a//8btP//G7T//xu0//8btP//G7T//xu0//8btP//G7T//xu0
++        //8btP//G7T//xu0//8btP//G7T//x2a//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/6VS//+/
++        hf//v4j//8KL///CjP//w47//8SQ///Gk///x5T//8iW///Il///yJf//8iX///Il///ypr//saT/8uF
++        If+xdBj/sXQY/7F0GP+xdBj/sXQY/7F0Gv+vdCH/jHlV/xyZ//8Zsv//GbL//xmy//8Zsv//GbL//xmy
++        //8Zsv//GbL//xmy//8Zsv//GbL//xmy//8Zsv//GbL//xyZ//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAA
++        AADwgh1E/6dX///Fkf//xpT//8iW///Il///yJf//8mY///Kmv//y5z//8ye///Mnv//zJ3//82g///O
++        o///z6X//9Cm/8uFIf+pbRT/qW0U/6ltFP+pbRT/qW0U/6ltFP+pbRb/h3JP/xuY//8Wr///Fq///xav
++        //8Wr///Fq///xav//8Wr///Fq///xav//8Wr///Fq///xav//8Wr///Fq///xuY//8KKlTCAAAAPAAA
++        AAYAAAAAAAAAAAAAAADwgh1E/6lb///Il///yZj//8mZ///LnP//zJ///82g///Oov//z6T//9Gn///R
++        qP//0aj//9Go///Sqf//0an//9Go/8uFIf+pbRT/qW0U/6ltFP+pbRT/qW0U/6ltFP+pbRT/h3JP/xqX
++        //8Urf//FK3//xSt//8Urf//FK3//xSt//8Urf//FK3//xSt//8Urf//FK3//xSt//8Urf//FK3//xqX
++        //8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/6tf///NoP//z6T//9Cn///RqP//0aj//9Go///S
++        qf//06z//9Su///Ur///1bD//9Wv///Wsv//2LX//9m4/8uFIf+iaBH/omgR/6JoEf+iaBH/omgR/6Jo
++        Ef+iaBH/gW5N/xmW//8Sq///Eqv//xKr//8Sq///Eqv//xKr//8Sq///Eqv//xKr//8Sq///Eqv//xKr
++        //8Sq///Eqv//xmW//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/65k///RqP//0aj//9Kq///U
++        rf//1bD//9Ww///Wsf//17T//9m2///auf//2rn//9q5///auf//27r//9q4/8uFIf+gZhD/oGYQ/6Bm
++        EP+gZhD/oGYQ/6BmEP+gZhD/kGku/zd70v8bjf//FZ3//xCp//8Qqf//EKn//xCp//8Qqf//EKn//xCp
++        //8Qqf//EKn//xCp//8Qqf//EKn//xiV//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/69m///W
++        sf//17P//9i1///auf//2rn//9q5///auf//27v//9y8///cvf//3b///97B///fwv//4MT//+HH/8uF
++        If+aYQ3/mmEN/5phDf+aYQ3/mmEN/5phDf+aYQ3/mmEN/5phDf+CZjr/VHKV/yaA8P8Ykf//EaD//w6n
++        //8Op///Dqf//w6n//8Op///Dqf//w6n//8Op///Dqf//xeU//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAA
++        AADwgh1E/7Js///auf//2rn//9u6///dvv//3sD//96////ewf//38P//+HG///iyf//48r//+PK///j
++        yv//48r//+PK/8uFIf+YXwz/mF8M/5hfDP+YXwz/mF8M/5hfDP+YXwz/mF8M/5hfDP+YXwz/mF8M/5hf
++        DP9yaVj/NnrR/xGc//8Npv//Dab//w2m//8Npv//Dab//w2m//8Npv//Dab//xaT//8KKlTCAAAAPAAA
++        AAYAAAAAAAAAAAAAAADwgh1E/7Nu///dvv//38L//+HG///iyP//48j//+PK///jyv//48v//+TM///k
++        zP//48r//+XN///m0f//6NP//+rY/8uFIf+RWQj/kVkI/5FZCP+RWQj/kVkI/5FZCP+RWQj/kVkI/5FZ
++        CP+RWQj/kVkI/5FZCP+RWQj/WG2E/xCb//8LpP//C6T//wuk//8LpP//C6T//wuk//8LpP//C6T//xWS
++        //8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/7d1///jyv//48r//+PK///kzv//5tH//+bP///m
++        0f//6NP//+nW///q2f//7Nz//+zc///s3P//5tD//7t+/8yFIf+hahL/lF0K/49XB/+PVwf/j1cH/49X
++        B/+PVwf/j1cH/49XB/+PVwf/j1cH/49XB/+PVwf/V2yD/w+a//8Jov//CaL//wmi//8Jov//CaL//wmi
++        //8Jov//CaL//xSR//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/7d2///lz///59L//+jU///q
++        2P//7Nz//+zc///s3P//7Nz//+zc///s3P//7Nz//+DE//+7fv//kS3//40j//uKH//lhyD/xoQh/6t1
++        Gf+aYg3/iVME/4lTBP+JUwT/iVME/4lTBP+JUwT/iVME/4lTBP+JUwT/VGmC/w2Y//8HoP//B6D//weg
++        //8HoP//B6D//weg//8HoP//B6D//xOQ//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/7t+///s
++        3P//7Nz//+zc///s3P//7Nz//+zc///u4P//7+L///Hl///lz///smv//4sf//+MIP//iSD//4si//+J
++        IP//iSH//4kg//GIIP/YhiD/vIAf/6RtFv+PWQj/h1ED/4dRA/+HUQP/h1ED/4dRA/+HUQP/U2mB/wyX
++        //8Fnv//BZ7//wWe//8Fnv//BZ7//wWe//8Fnv//BZ7//xKP//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAA
++        AADwgh1E/7t+///t3v//7+H///Hl///y6P//8+r///Xt///17f//2rr//6tf//+KH///iR7//4ke//+M
++        IP//jSb//5Ap//+PLf//lC7//5M0//+VN//7mDr/8ppB/9+TO//PiSr/r3Yb/5ZhDf+ETwP/gEsB/4BL
++        Af+ASwH/UGaA/wqV//8DnP//A5z//wOc//8DnP//A5z//wOc//8DnP//A5z//xGO//8KKlTCAAAAPAAA
++        AAYAAAAAAAAAAAAAAADwgh1E/8CG///17f//9e3///Xt///17f//9e3//9q6//+lU///ih///4of//+K
++        IP//iiH//44q//+UMv//mTz//5tB//+fRv//pE3//6VQ//+mVP//plb//6ZY//mmWP/2plb/8JxH/9yV
++        PP++gB//o20V/4lUBv9+SQD/T2WA/wmU//8Cmv//Apr//wKa//8Cmv//Apr//wKa//8Cmv//Apr//xCN
++        //8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/8CG///17f//+PL///n0///Po///lzn//4sh//+R
++        MP//ljj//5k+//+fR///ok7//6VP//+lUv//plb//6hY//+sXv//r2T//7Fp//+zbf//tHD//7Vy//+5
++        ef//vHz//r6C///Di///wIf/6ahe/9ONLv+yfB3/XXOI/wiS//8AmP//AJj//wCY//8AmP//AJj//wCY
++        //8AmP//AJj//xCM//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADwgh1E/8WP///48f//zJ3//5o+//+W
++        N///o0///6ZV//+mVP//plX//6dX//+pW///rmT//7Fo//+ybP//tG///7Vy//+4d///vX3//8CD///D
++        h///xIv//8SN///Fj///yJL//8aS///Fjv//yJX//8CH//+pWv+7kV7/KZPV/wSa//8Cl///AJj//wCY
++        //8AmP//AJj//wCY//8AmP//AJj//xCM//8KKlTCAAAAPAAAAAYAAAAAAAAAAAAAAADmfBxH/6BJ//+T
++        MP//mDv//6RT//+mVv//plb//6pb//+vaP//tG///7Vy//+3dv//u33//8CE///DiP//xIz//8SN///G
++        j///yZX//8ua///On///z6L//9Cj///Rp///1K7//9q3///Urv//q17/n49z/zCV1f8Srv//GMX//x7P
++        //8Yxf//C63//wSa//8AmP//AJj//wCY//8AmP//AJj//xCM//8KKlTCAAAAQAAAAAYAAAAAAAAAAAAA
++        AAD/ih9w/Ykf0f+TMP//nEH//6pd//+1cv//uXn//72A///EiP//w4j//8SL///Ejv//x5P//8ua///O
++        oP//0KT//9Kn///Tqv//1K7//9q3///cvP//4ML//+HE///hxv//y5z/76dh/4CRj/8mm+P/ILT//zvP
++        //9D1///NdT//yDQ//8ez///Hs///x7P//8Tu///Cqr//wKX//8AmP//Apf//xCM//8KK1W/AAAATAAA
++        AAoAAAAAAAAAAAAAAAAAAAAAAAAAAP+KHyD9iR+B/Ykf4f+gSf//smv//8SO///Ejv//xZH//8uc///R
++        pv//06v//9ax///cuf//3r3//+DB///hxf//4cb//+HG///hxf//4cb//8CK/9+iZf9wkp3/H6Hx/zvA
++        //9i2///ZN7//0/a//9D1///Q9f//0HX//8x0///Hs///x7P//8ez///Hs///x3M//8RuP//BqP//waU
++        //8GXaOvAAAAKwAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP+KHzD7iB+R/o0m8P+j
++        Uf//z6P//+DB///fwv//4cL//+HG///kzf//5tL//+XN///lzv//6dT//+nU///Ilv/PmV7/YJOr/xun
++        //9Zyf//juf//4Dk//9u4P//ad///2nf//9g3f//Stn//0PX//9D1///Ptb//yrS//8ez///Hs///x7P
++        //8Tu///BJ///wCJ5bEIbsI/AAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAP+KH1D6hx6i/pU18P+waf//2rj//+7e///y5v//9+3///v3///48P//xY//r5Zz/0CV
++        x/8trv//htn//67t//+c6v//juf//47n//+M5///fOP//2nf//9p3///ad///1vc//9F2P//Q9f//0PX
++        //820f//Ebf//wSb+fUAhN2UAHG+KwAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/4ofEPyIH2H7iB+y/6BJ///Mnv//4sf//7Zz/5+P
++        c/8gluP/Ubv//77q///L8///uO///7Pu//+z7v//quz//5fp//+O5///juf//4nm//914v//ad///2nf
++        //9n3///T9f//yK4//8Emfr0AIjkjwBalxsAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        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
++        GOLyhh790ZAp/69+JPNcQRHXGxMFtwAAAJoAAABuAAAAQAAAABsAAAAKAAAAAwAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAABgAAABDbjwNosVr
++        GOT/ih///4of//SGHf/inDD//7U//+qmNf/IjSr6gVsY5j0rC8gAAACqAAAAjQAAAFoAAAAuAAAAEwAA
++        AAYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABwAAABwAAABMbDoNoNNy
++        Gur/ih///4of//+KH///iR3/9IUc/9yZLf/0rjr/9K06//WtOv/wqjf/3Zww/7R/I/ZhRBLZJBgDuwAA
++        AJ0AAABzAAAAQAAAABkAAAAJAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcAAABAg0cQsctu
++        GOj/iR7//4ke//+JHv//iR7//4og//+LI//1iiP/2ZYr/+2oNv/spjb/7KY2/+ymNf/tpzb/7qg3/+Kg
++        Mf/PjR/7UWBq6QYpUskAAACpAAAAhQAAAE8AAAAlAAAADwAAAAMAAAAAAAAAAAAAAAAAAAAA2HUaVed9
++        HOb/iiD//4si//+MJP//jib//48q//+QLP//kS7//5Mw//WPLv/Vkin/5qEy/+WgMv/loDL/5aAx/+Sf
++        Mf/knzH/5qAy/+ygLP93mqf/Hqn+/x582PINOG/UAw4cswAAAJAAAABjAAAALwAAAAcAAAAAAAAAAAAA
++        AAD6iCHE/5Ar//+RLf//ki///5Mw//+UM///lTX//5Y4//+YOv//mT3/9pU5/9KPJv/gnC//35ov/9+a
++        L//fmi//4poq/+WaJv/fmi3/45go/3aYo/8jxf//Lsj//yu2//8hiuH1E1Ce4AUTJrwAAACWAAAAMQAA
++        AAQAAAAAAAAAAPiJJLr/lzf//5c6//+ZPf//mj///5tB//+dQ///nUX//6BJ//+gTP/2nET/z4sk/9mW
++        LP/ZlSv/2ZUu/9mVM/+xkFv/qY1i/92TJP/klBv/cpWi/x+///8rxf//K8f//yvG//8qwP//JJr9/ggi
++        Rb0AAAA5AAAABgAAAAAAAAAA+Ispuv+dQ///nkb//59I//+hS///ok7//6NQ//+kU///p1b//6dY//ai
++        T//MiSL/1JIq/9SRKf/VkS3/0pE3/3WPnv8aof//T5DH/5mIbf9ukKL/Hbz//yjC//8owf//KMH//yjE
++        //8msf//CilRwQAAADoAAAAGAAAAAAAAAAD4jS26/6RS//+lVP//plb//6dZ//+pXP//ql3//6tg//+t
++        ZP//rmb/96dZ/8mFH//NjCb/zowm/8+MKv/Jizf/d4+Y/xq5//8fwP//H6v//yGd//8mu///Jr///ya/
++        //8mv///JsH//ySt//8KKFDAAAAAOgAAAAYAAAAAAAAAAPiOL7r/q17//6xh//+sY///r2X//7Bq//+x
++        av//sWz//7Nv//+1c//3rWT/xIId/8WFI//HhyP/x4cn/8OFN/9zipn/GrX//yO9//8kv///JL///yO8
++        //8jvP//I7z//yO8//8jvv//Iqv//wooUMAAAAA6AAAABgAAAAAAAAAA+JEzuv+xav//s23//7Nw//+1
++        cv//t3f//7h4//+4d///unz//72A//izbf/Bfxv/voAf/8CAH//AgCL/vIAz/2+Ilv8Ys///ILr//yC5
++        //8guf//ILn//yC5//8guf//ILn//yC7//8gqf//CihQwAAAADoAAAAGAAAAAAAAAAD4kzW6/7d3//+5
++        e///unz//7x+//+9g///v4T//7+E///Ahv//xIz/9rh1/758Gf+4ehz/uXsc/7p7Hv+2eyv/bIST/xWw
++        //8dt///Hbb//x22//8dtv//Hbb//x22//8dtv//Hbj//x6n//8KKFDAAAAAOgAAAAYAAAAAAAAAAPiU
++        Obr/voP//8CI///Aif//wov//8OP///Gkv//xpL//8aT///Kmf/4vYH/u3kW/69zF/+xdBj/s3UY/7V1
++        G/9sgYj/E67//xq0//8as///GrP//xqz//8as///GrP//xqz//8atf//HKX//wooUMAAAAA6AAAABgAA
++        AAAAAAAA+JY9uv/EkP//xpT//8eW///JmP//ypv//8ye///Mnv//zaD//8+m//rFkf+3dRT/qWwU/6tu
++        Ff+qbhX/sGwO/2p8gf8Pq///FrD//xav//8Wr///Fq///xav//8Wr///Fq///xax//8Zov//CihQwAAA
++        ADoAAAAGAAAAAAAAAAD4mUC6/8uc///Nof//zqP//8+k///Qp///06r//9Ot///TrP//1rH/+sud/7Ry
++        Ef+jaBH/pWoS/6VqEv+qaAr/ZHqE/wir//8Rrv//E63//xOs//8TrP//E6z//xOs//8TrP//Eq7//xaf
++        //8KKFDAAAAAOgAAAAYAAAAAAAAAAPibRLr/0qr//9Os///VsP//1rH//9ez///Ztv//2rn//9q6///d
++        vv/70qf/sW8P/5tjDv+eZQ//nmUP/6JkCv9/a0r/M4PQ/xab/P8Kp///Dqr//xCp//8Qqf//EKn//xCp
++        //8Pqv//FZ7//wooUMAAAAA6AAAABgAAAAAAAAAA+JxHuv/Ztv//2rn//9y9///dvf//3b///9/C///g
++        xf//4cb//+TL//vZtf+tbAz/lVwL/5lgDP+ZYAz/mGAN/5xfBv+aXgn/fWRF/1VzkP8ck/L/DKf//w2m
++        //8Npv//Dab//wyn//8Sm///CihQwAAAADoAAAAGAAAAAAAAAAD4nku6/9/C///hxf//4sn//+PK///k
++        y///5c7//+XP///o1P//8OL/+9iz/6hqDP+KVAX/j1cH/5FZCP+RWQj/kVkI/5JZBv+XWAD/l1UA/zp/
++        uv8Gpv//C6T//wuk//8LpP//CqX//xGa//8KKFDAAAAAOgAAAAYAAAAAAAAAAPifT7r/5c7//+bR///p
++        1v//6tj//+vZ///v4P//8OT//+XO//+9gv/+mDn/3YIb/7R1F/+ZYg3/iVMD/4hSA/+JUwT/i1QF/4tV
++        BP+MUgX/N324/wSj//8Iof//CKH//wih//8Hov//Dpf//wooUMAAAAA6AAAABgAAAAAAAAAA+KFTuv/s
++        3P//7t7//+7g///x5v//9e7//+DF//+5ev//jSP//4cY//+IHv//jCP//40m/+yNJ//JhSj/qGwV/41Y
++        Bf+CTgH/gkwA/4VOAv80e7f/AZ///wSd//8Enf//BJ3//wOe//8Mlf//CihQwAAAADoAAAAGAAAAAAAA
++        AAD4o1a6//Pq///69f//9u///+LJ//+waP//jyj//4QU//+NJv//lDL//5g7//+eQ///oUr//6NP//6l
++        VP/0o1D/3ZQ9/7h7Iv+TXgv/gkoA/zV3tP8Anf//Apr//wKa//8Cmv//AZv//wqT//8KKFDAAAAAOgAA
++        AAYAAAAAAAAAAPinXbr/+/f//929//+vZ///kzD//5U2//+cQv//pFH//6lX//+qXf//rWH//7Nq//+3
++        c///unn//7t9///AhP//w4r//8mT//quXP/KhCv/KoPL/wCV//8Al///AJj//wCY//8Amf//CZH//woo
++        UMAAAAA6AAAABQAAAAAAAAAA/Jk/wv+rXf//nkb//6JP//+sX///sWr//7Ru//+2df//vn///8GG///C
++        if//xo///8uZ///PoP//0qj//9Wq///Sov/ts37/j5uW/z+q3f8Wwf7/Erz//wek//8Bmf//AJX//wCX
++        //8JkP//CidPvAAAAD8AAAAHAAAAAAAAAAD/iBxf+oojpv6XO/H/sGj//8KK///Hkf//x5P//8uc///Q
++        pP//1q3//9mz///auf//3sD//+XJ///Upf/TtJL/fJ6m/z2x5/83zf//P9n//zfX//8m0v//HtH//xnH
++        //8Rtv//B6b//wiV//8KQnyjAAAAKQAAAAQAAAAAAAAAAAAAAAAAAAAA/4gaHPmKIlz8kjLH/q9p9P/T
++        qf//38H//+fS///p1f//7t3//+3R//nZuf/HrIz/cJ+y/1G46P9s3f//dOX//2zh//9c3P//S9n//0DW
++        //801f//JdT//x7Q//8RtPv7AI3rygVntT4AAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAD/hxks+4kfePugTsf/yJf//+3Z///et/+ms67/cqS5/3DJ+/+g6f//r/H//5vq//+O5///geX//3Hh
++        //9p4P//Xd///0PT//8dt///A4/mtAB3y0UAAAAFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++        AAAAAAAAAAAAAAAAAAAAAAAA/4YWB/mEEivEk2CfNZfV8YjJ8//d+v//8v///9T2//++8P//su7//6br
++        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
++        JP+AACz/4AAr//wHLv8=
++</value>
++  </data>
++</root>
+\ No newline at end of file
+
+Modified: trunk/OpenDesktop/Indexer.cs
+===================================================================
+--- trunk/OpenDesktop/Indexer.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/Indexer.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -25,13 +25,14 @@
+ using Lucene.Net.QueryParsers;
+ using Lucene.Net.Analysis.Standard;
+ 
+-using ODIPlugin;
++using OpenDesktop.Plugin;
+ 
+ namespace OpenDesktop
+ {
+     enum IndexMode : int
+     {
+         CREATE,
++		APPEND,
+         SEARCH
+     }
+ 
+@@ -45,6 +46,11 @@
+         bool m_bSucess;
+         #endregion
+ 
++		/// <summary>
++		/// Constructor
++		/// </summary>
++		/// <param name="indexPath">Path where you wish to create the index</param>
++		/// <param name="mode">One of Create, Append or Search</param>
+         public Indexer(string indexPath, IndexMode mode)
+         {
+             m_indexMode = mode;
+@@ -65,24 +71,42 @@
+                     m_bSucess = false;
+                 }
+             }
+-            else if (mode == IndexMode.SEARCH)
+-            {
+-                try
+-                {
+-                    m_indexSearcher = new IndexSearcher(indexPath);
+-                    m_bSucess = true;
+-                }
+-                catch (Exception e)
+-                {
+-                    Logger.Instance.LogException(e);
+-                    m_bSucess = false;
+-                }
+-            }
++			else if (mode == IndexMode.APPEND)
++			{
++				try
++				{
++					m_indexWriter = new IndexWriter(indexPath, m_analyzer, false);
++					m_indexWriter.SetUseCompoundFile(true);
++					m_bSucess = true;
++				}
++				catch (Exception e)
++				{
++					Logger.Instance.LogException(e);
++					m_bSucess = false;
++				}
++			}
++			else if (mode == IndexMode.SEARCH)
++			{
++				try
++				{
++					m_indexSearcher = new IndexSearcher(indexPath);
++					m_bSucess = true;
++				}
++				catch (Exception e)
++				{
++					Logger.Instance.LogException(e);
++					m_bSucess = false;
++				}
++			}
+         }
+ 
++		/// <summary>
++		/// Close the index
++		/// </summary>
+         public void Close()
+         {
+-            if (m_indexMode == IndexMode.CREATE && m_indexWriter != null)
++            if ((m_indexMode == IndexMode.CREATE || m_indexMode == IndexMode.APPEND)
++				&& m_indexWriter != null)
+             {
+                 m_indexWriter.Close();
+                 m_indexWriter = null;
+@@ -94,35 +118,53 @@
+             }
+         }
+ 
++		/// <summary>
++		/// Adds a document to the index
++		/// </summary>
++		/// <param name="info">Document to add</param>
++		/// <returns>true if successful, false otherwise</returns>
+         public bool AddDocument(SearchInfo info)
+         {
+-            if (m_bSucess && m_indexMode != IndexMode.CREATE)
+-                return false;
+-            Document doc = new Document();
+-            doc.Add(Field.UnIndexed("title", info.Title));
+-            doc.Add(Field.Text("content", info.Text));
+-            doc.Add(Field.UnIndexed("launcher", info.Launcher));
+-            m_indexWriter.AddDocument(doc);
+-
+-            return true;
++			bool retVal = false;
++			if (m_bSucess && (m_indexMode == IndexMode.CREATE || m_indexMode == IndexMode.APPEND))
++			{
++				Document doc = new Document();
++				doc.Add(Field.UnIndexed("title", info.Title));
++				doc.Add(Field.Text("content", info.Text));
++				doc.Add(Field.UnIndexed("launcher", info.Launcher));
++				m_indexWriter.AddDocument(doc);
++				retVal = true;
++			}
++			return retVal;
+         }
+ 
++		/// <summary>
++		/// Searches an index opened in search mode for the search term(s)
++		/// </summary>
++		/// <param name="searchTerm">Term to search for. Multiple terms are separated by + </param>
++		/// <returns>An array of search results</returns>
+         public SearchInfo[] Search(string searchTerm)
+         {
+-            if (m_bSucess && m_indexMode != IndexMode.SEARCH && searchTerm != null)
+-                return null;
+-            
+-            searchTerm = searchTerm.Replace("+", " + ");
+-            
+-            Query query = QueryParser.Parse(searchTerm, "content", m_analyzer);
+-            Hits hits = m_indexSearcher.Search(query);
+-            int len = hits.Length();
+-            SearchInfo[] retVal = new SearchInfo[len];
+-            for (int i = 0; i < len; i++)
+-            {
+-                retVal[i] = new SearchInfo(hits.Doc(i).Get("title"), hits.Doc(i).Get("content"), hits.Doc(i).Get("launcher"));
+-            }
+-            return retVal;
+-        }
+-    }
++			SearchInfo[] retVal = null;
++
++			if (m_bSucess && m_indexMode == IndexMode.SEARCH && searchTerm != null)
++			{
++				// TODO: Needs more work. haha
++				searchTerm = searchTerm.Replace("+", " + ");
++
++				Query query = QueryParser.Parse(searchTerm, "content", m_analyzer);
++				Hits hits = m_indexSearcher.Search(query);
++				int len = hits.Length();
++				if (len > 0)
++				{
++					retVal = new SearchInfo[len];
++					for (int i = 0; i < len; i++)
++					{
++						retVal[i] = new SearchInfo(hits.Doc(i).Get("title"), hits.Doc(i).Get("content"), hits.Doc(i).Get("launcher"));
++					}
++				}
++			}
++			return retVal;
++		}
++	}
+ }
+
+Modified: trunk/OpenDesktop/OpenDesktop.csproj
+===================================================================
+--- trunk/OpenDesktop/OpenDesktop.csproj	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/OpenDesktop.csproj	2006-01-22 11:25:28 UTC (rev 12)
+@@ -2,108 +2,72 @@
+   <PropertyGroup>
+     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+-    <ProductVersion>8.0.50727</ProductVersion>
+     <SchemaVersion>2.0</SchemaVersion>
+-    <ProjectGuid>{C9701934-2BA6-4BFD-9665-B5640B00387A}</ProjectGuid>
+-    <OutputType>WinExe</OutputType>
+-    <AppDesignerFolder>Properties</AppDesignerFolder>
++    <ProjectGuid>{61CB7178-B1C3-4C40-88FC-29A417A7A705}</ProjectGuid>
+     <RootNamespace>OpenDesktop</RootNamespace>
+     <AssemblyName>OpenDesktop</AssemblyName>
+-    <StartupObject>OpenDesktop.Program</StartupObject>
++    <OutputType>WinExe</OutputType>
++    <WarningLevel>4</WarningLevel>
++    <NoStdLib>False</NoStdLib>
++    <NoConfig>False</NoConfig>
++    <RunPostBuildEvent>OnSuccessfulBuild</RunPostBuildEvent>
+     <ApplicationIcon>main.ico</ApplicationIcon>
+   </PropertyGroup>
+   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+-    <DebugSymbols>true</DebugSymbols>
+-    <DebugType>full</DebugType>
+-    <Optimize>false</Optimize>
+-    <OutputPath>bin\Debug\</OutputPath>
+-    <DefineConstants>DEBUG;TRACE</DefineConstants>
+-    <ErrorReport>prompt</ErrorReport>
+-    <WarningLevel>4</WarningLevel>
+-    <DocumentationFile>OpenDesktop.xml</DocumentationFile>
++    <DebugSymbols>True</DebugSymbols>
++    <Optimize>False</Optimize>
++    <AllowUnsafeBlocks>False</AllowUnsafeBlocks>
++    <CheckForOverflowUnderflow>True</CheckForOverflowUnderflow>
++    <OutputPath>..\bin\Debug\</OutputPath>
++    <TreatWarningsAsErrors>False</TreatWarningsAsErrors>
+   </PropertyGroup>
+   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+-    <DebugType>pdbonly</DebugType>
+-    <Optimize>false</Optimize>
+-    <OutputPath>bin\Release\</OutputPath>
+-    <DefineConstants>DEBUG;TRACE</DefineConstants>
+-    <ErrorReport>prompt</ErrorReport>
+-    <WarningLevel>4</WarningLevel>
+-    <DocumentationFile>OpenDesktop.xml</DocumentationFile>
++    <DebugSymbols>False</DebugSymbols>
++    <Optimize>True</Optimize>
++    <AllowUnsafeBlocks>False</AllowUnsafeBlocks>
++    <CheckForOverflowUnderflow>False</CheckForOverflowUnderflow>
++    <OutputPath>..\bin\Release\</OutputPath>
++    <TreatWarningsAsErrors>False</TreatWarningsAsErrors>
+   </PropertyGroup>
+   <ItemGroup>
+-    <Reference Include="Lucene.Net, Version=1.4.3.4, Culture=neutral">
+-      <SpecificVersion>False</SpecificVersion>
+-      <HintPath>..\Lucene\Lucene.Net.dll</HintPath>
+-    </Reference>
+     <Reference Include="System" />
+     <Reference Include="System.Data" />
+-    <Reference Include="System.Deployment" />
+     <Reference Include="System.Drawing" />
+     <Reference Include="System.Windows.Forms" />
+     <Reference Include="System.Xml" />
++    <Reference Include="Lucene.Net">
++      <HintPath>..\Lucene\Lucene.Net.dll</HintPath>
++      <Private>True</Private>
++    </Reference>
+   </ItemGroup>
+   <ItemGroup>
+-    <Compile Include="Config.cs" />
++    <Compile Include="AssemblyInfo.cs" />
++    <Compile Include="WebServer.cs" />
+     <Compile Include="FileExplorer.cs" />
+     <Compile Include="Indexer.cs" />
+     <Compile Include="Logger.cs" />
+     <Compile Include="NameObjectCollection.cs" />
+     <Compile Include="PluginManager.cs" />
+     <Compile Include="Program.cs" />
+-    <Compile Include="Properties\AssemblyInfo.cs" />
+-    <EmbeddedResource Include="Properties\Resources.resx">
+-      <Generator>ResXFileCodeGenerator</Generator>
+-      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+-      <SubType>Designer</SubType>
+-    </EmbeddedResource>
+-    <Compile Include="Properties\Resources.Designer.cs">
+-      <AutoGen>True</AutoGen>
+-      <DependentUpon>Resources.resx</DependentUpon>
+-      <DesignTime>True</DesignTime>
+-    </Compile>
+-    <None Include="Properties\Settings.settings">
+-      <Generator>SettingsSingleFileGenerator</Generator>
+-      <LastGenOutput>Settings.Designer.cs</LastGenOutput>
+-    </None>
+-    <Compile Include="Properties\Settings.Designer.cs">
+-      <AutoGen>True</AutoGen>
+-      <DependentUpon>Settings.settings</DependentUpon>
+-      <DesignTimeSharedInput>True</DesignTimeSharedInput>
+-    </Compile>
+     <Compile Include="ReplaceTag.cs" />
+     <Compile Include="Synchronizer.cs" />
+     <Compile Include="TrayIcon.cs" />
+-    <Compile Include="WebServer.cs" />
++    <Compile Include="Settings.cs" />
++    <Compile Include="Resources.cs" />
++    <EmbeddedResource Include="OpenDesktop.resources">
++      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
++    </EmbeddedResource>
++    <Compile Include="IndexGeneration.cs" />
++    <EmbeddedResource Include="IndexGeneration.resx">
++      <DependentUpon>IndexGeneration.cs</DependentUpon>
++    </EmbeddedResource>
++    <Compile Include="FirstTimeUser.cs" />
+   </ItemGroup>
+   <ItemGroup>
+-    <None Include="app.config" />
+-    <None Include="main.ico" />
+-  </ItemGroup>
+-  <ItemGroup>
+-    <ProjectReference Include="..\ODIPlugin\ODIPlugin.csproj">
+-      <Project>{99E38044-8BFC-4805-94F9-84C275E3120D}</Project>
+-      <Name>ODIPlugin</Name>
++    <ProjectReference Include="..\IPlugin\IPlugin.csproj">
++      <Project>{3668A126-BE07-4692-82C4-B061F1212105}</Project>
++      <Name>IPlugin</Name>
+     </ProjectReference>
+   </ItemGroup>
+-  <ItemGroup>
+-    <Content Include="ToDo.txt" />
+-  </ItemGroup>
+-  <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
+-  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+-       Other similar extension points exist, see Microsoft.Common.targets.
+-  <Target Name="BeforeBuild">
+-  </Target>
+-  <Target Name="AfterBuild">
+-  </Target>
+-  -->
+-  <PropertyGroup>
+-    <PostBuildEvent>mkdir "$(TargetDir)\WebRoot"
+-copy "$(SolutionDir)\WebRoot\*.*" "$(TargetDir)\WebRoot"
+-mkdir "$(TargetDir)\Plugins"
+-move "$(TargetDir)\YammyPlugin.dll" "$(TargetDir)\Plugins\"
+-move "$(TargetDir)\YammyPlugin.pdb" "$(TargetDir)\Plugins\"</PostBuildEvent>
+-    <PreBuildEvent>
+-    </PreBuildEvent>
+-  </PropertyGroup>
++  <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.Targets" />
+ </Project>
+\ No newline at end of file
+
+Added: trunk/OpenDesktop/OpenDesktop.resources
+===================================================================
+(Binary files differ)
+
+
+Property changes on: trunk/OpenDesktop/OpenDesktop.resources
+___________________________________________________________________
+Name: svn:mime-type
+   + application/octet-stream
+
+Modified: trunk/OpenDesktop/PluginManager.cs
+===================================================================
+--- trunk/OpenDesktop/PluginManager.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/PluginManager.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -20,7 +20,7 @@
+ using System.Reflection;
+ using System.Collections;
+ 
+-using ODIPlugin;
++using OpenDesktop.Plugin;
+ 
+ namespace OpenDesktop
+ {
+
+Modified: trunk/OpenDesktop/Program.cs
+===================================================================
+--- trunk/OpenDesktop/Program.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/Program.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -23,37 +23,58 @@
+ {
+     static class Program
+     {
++    	static object m_firstTimeUserLock = new object();
++    	
+         /// <summary>
+         /// The main entry point for the application.
+         /// </summary>
+         [STAThread]
+         static void Main()
+         {
++			if (AppIsRunning())
++			{
++				return;
++			}
+             Logger LOG = Logger.Instance;
+             LOG.LogDebug("Starting OpenDesktop");
+-            if (AppIsRunning())
+-            {
+-                return;
+-            }
++            
++            FirstTimeUser firstTimeUser = new FirstTimeUser();
++            bool alreadydone = firstTimeUser.IsFirstTimeUser();
++            //firstTimeUser = null;
++            
+             LOG.LogDebug("Bringing up Webserver");
+             WebServer.Instance.Start();
+             LOG.LogDebug("Displaying NotifyIcon");
+             TrayIcon trayIcon = new TrayIcon();
+             MessageBox.Show(WebServer.Instance.LocalAddress);
+-            FileExplorer fileExplorer = new FileExplorer(PluginManager.Instance.RegisteredFileExtensions);
+-            //fileExplorer.IndexProgress += new IndexProgressHandler(fileExplorer_IndexProgress);
+-            fileExplorer.Run();
++
++            FileExplorer fileExplorer = null;
++            IndexProgressHandler dlgtIndexProgressHandler = null;
++            if(!alreadydone)
++            {
++	            fileExplorer = new FileExplorer(PluginManager.Instance.RegisteredFileExtensions);
++	            dlgtIndexProgressHandler = new IndexProgressHandler(fileExplorer_IndexProgress);
++	            fileExplorer.IndexProgress += dlgtIndexProgressHandler;
++	            fileExplorer.Run(false); // Dont be aggressive
++            }
+             
+             Application.Run();
+ 
+-            fileExplorer.Stop();
++            if(!alreadydone)
++            {
++            	fileExplorer.IndexProgress -= dlgtIndexProgressHandler;
++            	fileExplorer.Stop();
++            }
+             WebServer.Instance.Stop();
+             LOG.LogDebug("Exiting OpenDesktop");
+             Logger.Instance.Dispose();
+         }
+-
+-        // Changes the TrayIcon message to reflect number of documents indexed
+-        static void fileExplorer_IndexProgress(int numDocs)
++        
++        /// <summary>
++        /// Changes the TrayIcon message to reflect number of documents indexed
++        /// </summary>
++        /// <param name="numDocs"></param>
++        static void fileExplorer_IndexProgress(string filePath, int numDocs)
+         {
+             
+         }
+@@ -70,4 +91,4 @@
+             return !bCreatedNew;
+         }
+     }
+-}
+\ No newline at end of file
++}
+
+Modified: trunk/OpenDesktop/ReplaceTag.cs
+===================================================================
+--- trunk/OpenDesktop/ReplaceTag.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/ReplaceTag.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -16,11 +16,12 @@
+ // along with this program; if not, write to the Free Software
+ // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ using System;
+-using System.Collections.Specialized;
+ using System.Text;
+ using System.Text.RegularExpressions;
++using System.Collections.Specialized;
+ 
+-using ODIPlugin;
++using OpenDesktop.Plugin;
++using OpenDesktop.Properties;
+ 
+ namespace OpenDesktop
+ {
+@@ -54,9 +55,13 @@
+             {
+                 return DoSearchResult();
+             }
++            else if (strTag.Equals("OpenDesktopSettings", StringComparison.InvariantCultureIgnoreCase))
++            {
++                return Settings.Instance.ProcessTag(m_queryString);
++            }
+             else if (PluginManager.Instance.RegisteredHTMLTags.ContainsKey(strTag))
+             {
+-                ODIPlugin.IPlugin plugin = PluginManager.Instance.RegisteredHTMLTags[strTag] as ODIPlugin.IPlugin;
++                IPlugin plugin = PluginManager.Instance.RegisteredHTMLTags[strTag] as IPlugin;
+                 if (plugin != null)
+                 {
+                     return plugin.ProcessTag(strTag, m_queryString);
+@@ -137,12 +142,12 @@
+             // Lock the index before starting search. This is to prevent FileExplorer from
+             // moving/deleting index while a search operation is in progress
+             Synchronizer.Instance.LockIndex(this);
+-            Indexer m_indexer = new Indexer(OpenDesktop.Properties.Settings.Default.IndexPath, IndexMode.SEARCH);
++            Indexer m_indexer = new Indexer(OpenDesktop.Properties.Settings.Instance.IndexPath, IndexMode.SEARCH);
+ 
+             string strReturnVal = string.Empty;
+ 
+             SearchInfo[] sinfo = m_indexer.Search(strSearchTerm);
+-            if (sinfo.Length > 0)
++            if (sinfo != null && sinfo.Length > 0)
+             {
+                 StringBuilder sb = new StringBuilder();
+                 int iEndAt = iStartAt + 10;
+
+Added: trunk/OpenDesktop/Resources.cs
+===================================================================
+--- trunk/OpenDesktop/Resources.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/Resources.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -0,0 +1,102 @@
++/*
++ * Created by SharpDevelop.
++ * User: pravin
++ * Date: 1/22/2006
++ * Time: 2:08 AM
++ * 
++ * To change this template use Tools | Options | Coding | Edit Standard Headers.
++ */
++
++using System;
++
++namespace OpenDesktop.Properties
++{
++	/// <summary>
++	/// Description of Resource.
++	/// </summary>
++	public class Resources
++	{
++		public static string TrayMenuExit
++		{
++			get
++			{
++				return "&Exit";
++			}
++		}
++		
++		public static string TrayMenuOpen
++		{
++			get
++			{
++				return "&Open";
++			}
++		}
++		
++		public static string TrayMenuSettings
++		{
++			get
++			{
++				return "&Settings";
++			}
++		}
++		
++		public static string FileNotFound
++		{
++			get
++			{
++				return "404 - File Not Found";
++			}
++		}
++		
++		public static string NoSearchResults
++		{
++			get
++			{
++				return "No Search Results";
++			}
++		}
++		
++		public static string SearchResultsHeader
++		{
++			get
++			{
++				// ex. Results 1 - 10 of about 100 for OpenDesktop
++				return "Results {0} - {1} of about {2} for {3}";
++			}
++		}
++		
++		public static string SearchResultsNext
++		{
++			get
++			{
++				return "Next";
++			}
++		}
++		
++		public static string SearchResultsPrev
++		{
++			get
++			{
++				return "Prev";
++			}
++		}
++		
++		public static string ServerString
++		{
++			get
++			{
++				return "Open Desktop Search 0.1";
++			}
++		}
++		
++		public static System.Drawing.Icon MainIcon
++		{
++			get
++			{
++				System.Resources.ResourceManager rm = new System.Resources.ResourceManager("OpenDesktop.OpenDesktop", typeof(Resources).Assembly);
++				System.Drawing.Icon icon = rm.GetObject("main") as System.Drawing.Icon;
++				return icon;
++			}
++		}
++	}
++}
+
+Added: trunk/OpenDesktop/Settings.cs
+===================================================================
+--- trunk/OpenDesktop/Settings.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/Settings.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -0,0 +1,197 @@
++/*
++ * Created by SharpDevelop.
++ * User: pravin
++ * Date: 1/22/2006
++ * Time: 2:08 AM
++ * 
++ * To change this template use Tools | Options | Coding | Edit Standard Headers.
++ */
++
++using System;
++using System.IO;
++using System.Text;
++using System.Collections.Specialized;
++
++namespace OpenDesktop.Properties
++{
++	/// <summary>
++	/// Description of Settings.
++	/// </summary>
++	public class Settings
++	{
++		#region Member Variables
++		private static object m_lock = new object();
++		private static Settings _instance = null;
++		
++		private string m_strAppData;
++		private string m_strIndexPath;
++		private string m_strTempIndexPath;
++		private DateTime m_dtIndexLastUpdated;
++		private int m_indexUpdateFreq;
++		#endregion
++		
++		/// <summary>
++		/// Constructor
++		/// </summary>
++		private Settings()
++		{
++			// TODO: If Settings is empty, fill it up with default values and save
++			m_strAppData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OpenDesktop");
++			
++			ReadConfig();
++		}
++		
++		
++		#region Standard Singleton Implementation
++		public static Settings Instance
++		{
++			get
++			{
++				if(_instance == null)
++				{
++					lock(m_lock)
++					{
++						if(_instance == null)
++						{
++							_instance = new Settings();
++						}
++					}
++				}
++				return _instance;
++			}
++		}
++		#endregion
++		
++		public string IndexPath
++		{
++			get
++			{
++				return m_strIndexPath;
++			}
++			set
++			{
++				;
++			}
++		}
++		
++		public string TempIndexPath
++		{
++			get
++			{
++				return m_strTempIndexPath;
++			}
++			set
++			{
++				;
++			}
++		}
++		
++		public DateTime IndexLastUpdated
++		{
++			get
++			{
++				return m_dtIndexLastUpdated;
++			}
++			set
++			{
++				m_dtIndexLastUpdated = value;
++			}
++		}
++		
++		public int IndexUpdateFrequency
++		{
++			get
++			{
++				return m_indexUpdateFreq;
++			}
++		}
++		
++		private void ReadConfig()
++		{
++			// Set Default values
++			m_strIndexPath = Path.Combine(m_strAppData, "Index");
++			m_strTempIndexPath = Path.Combine(m_strAppData, "TempIndex");
++			m_dtIndexLastUpdated = DateTime.MinValue;
++			m_indexUpdateFreq = 24;
++			
++			string strConfigFilePath = Path.Combine(m_strAppData, "config.ini");
++			if(!File.Exists(strConfigFilePath))
++				return;
++			StreamReader reader = new StreamReader(strConfigFilePath);
++			while(true)
++			{
++				string strLine = reader.ReadLine();
++				if(strLine == null)
++					break;
++				
++				string []strNameValue = strLine.Split('=');
++				if(strNameValue.Length != 2)
++					continue;
++				
++				switch(strNameValue[0].Trim())
++				{
++					case "IndexPath":
++						m_strIndexPath = strNameValue[1].Trim();
++						break;
++					case "TempIndexPath":
++						m_strTempIndexPath = strNameValue[1].Trim();
++						break;
++					case "IndexLastUpdated":
++						try
++						{
++							m_dtIndexLastUpdated = DateTime.Parse(strNameValue[1].Trim());
++						}
++						catch
++						{
++							m_dtIndexLastUpdated = DateTime.MinValue;
++						}
++						break;
++					case "IndexUpdateFreq":
++						m_indexUpdateFreq = Int32.Parse(strNameValue[1].Trim());
++						break;
++				}
++				
++			}
++			reader.Close();
++		}
++		
++		/// <summary>
++		/// Saves the settings to disk
++		/// </summary>
++		public void Save()
++		{
++			
++		}
++		
++		public string ProcessTag(NameValueCollection queryString)
++		{
++			StringBuilder sbResult = new StringBuilder();
++			if (queryString != null)
++			{
++				string strFirstTime = queryString["firstTime"];
++				if (strFirstTime != null)
++				{
++					// First time user
++
++				}
++				Settings.Instance.IndexPath = queryString["IndexPath"];
++				Settings.Instance.TempIndexPath = queryString["TempIndexPath"];
++			}
++			sbResult.Append(@"<form action=""config.html"" method=""post"">");
++			sbResult.Append(@"<table cellspacing=""2"" cellpadding=""2"" border=""0"">");
++			sbResult.Append(@"<tr><td colspan=""2""><b>Index Settings:</b></td></tr>");
++			sbResult.Append(@"<tr><td>Index Path:</td><td><input type=""file"" name=""IndexPath"" value=""" + Settings.Instance.IndexPath + @""" /></td></tr>");
++			sbResult.Append(@"<tr><td>Temp Path:</td><td><input type=""file"" name=""TempIndexPath"" value=""" + Settings.Instance.TempIndexPath + @""" /></td></tr>");
++			sbResult.Append(@"<tr><td>Update Frequency:</td><td><input type=""text"" name=""UpdateFrequency"" size=""4"" value=""" + Settings.Instance.IndexUpdateFrequency + @"""/>hrs</td></tr>");
++			sbResult.Append(@"<tr><td colspan=""2""><b>Startup:</b></td></tr>");
++			sbResult.Append(@"<tr><td colspan=""2""><input type=""checkbox"" name=""LaunchAtStartup"" /> Launch OpenDesktop when windows starts</td></tr>");
++			sbResult.Append(@"<tr><td colspan=""2""><b>Browser Settings:</b></td></tr>");
++			sbResult.Append(@"<tr><td colspan=""2""><input type=""checkbox"" name=""LaunchAtStartup"" /> Launch links in new window</td></tr>");
++			sbResult.Append(@"</table>");
++			sbResult.Append(@"<p align=""center""><input type=""submit"" value=""Save Settings"" /></p>");
++			sbResult.Append(@"</form>");
++
++			return sbResult.ToString();
++		}
++	}
++}
+
+Modified: trunk/OpenDesktop/TrayIcon.cs
+===================================================================
+--- trunk/OpenDesktop/TrayIcon.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/TrayIcon.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -64,7 +64,14 @@
+         {
+             if (WebServer.Instance.IsRunning)
+             {
+-                System.Diagnostics.Process.Start(WebServer.Instance.LocalAddress);
++				try
++				{
++					System.Diagnostics.Process.Start(WebServer.Instance.LocalAddress);
++				}
++				catch
++				{
++					System.Diagnostics.Process.Start("iexplore.exe",WebServer.Instance.LocalAddress);
++				}
+             }
+         }
+ 
+@@ -72,8 +79,15 @@
+         {
+             if (WebServer.Instance.IsRunning)
+             {
+-                string strExec = string.Format("{0}Settings.html", WebServer.Instance.LocalAddress);
+-                System.Diagnostics.Process.Start(strExec);
++                string strExec = string.Format("{0}config.html", WebServer.Instance.LocalAddress);
++				try
++				{
++					System.Diagnostics.Process.Start(strExec);
++				}
++				catch // This occurs if the .html association is not present
++				{
++					System.Diagnostics.Process.Start("iexplore.exe", strExec);
++				}
+             }
+         }
+ 
+
+Deleted: trunk/OpenDesktop/app.config
+===================================================================
+--- trunk/OpenDesktop/app.config	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop/app.config	2006-01-22 11:25:28 UTC (rev 12)
+@@ -1,24 +0,0 @@
+-<?xml version="1.0" encoding="utf-8" ?>
+-<configuration>
+-    <configSections>
+-        <sectionGroup name="userSettings" type="System.Configuration.UserSettingsGroup, System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" >
+-            <section name="OpenDesktop.Properties.Settings" type="System.Configuration.ClientSettingsSection, System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" allowExeDefinition="MachineToLocalUser" requirePermission="false" />
+-        </sectionGroup>
+-    </configSections>
+-    <userSettings>
+-        <OpenDesktop.Properties.Settings>
+-            <setting name="IndexPath" serializeAs="String">
+-                <value>C:\test</value>
+-            </setting>
+-            <setting name="NewIndexPath" serializeAs="String">
+-                <value>C:\test1</value>
+-            </setting>
+-            <setting name="IndexLastUpdated" serializeAs="String">
+-                <value>2006-01-01</value>
+-            </setting>
+-            <setting name="IndexUpdateFrequency" serializeAs="String">
+-                <value>24</value>
+-            </setting>
+-        </OpenDesktop.Properties.Settings>
+-    </userSettings>
+-</configuration>
+\ No newline at end of file
+
+Added: trunk/OpenDesktop/buildevents.bat
+===================================================================
+
+Modified: trunk/OpenDesktop.sln
+===================================================================
+--- trunk/OpenDesktop.sln	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/OpenDesktop.sln	2006-01-22 11:25:28 UTC (rev 12)
+@@ -1,32 +1,38 @@
+-?
+-Microsoft Visual Studio Solution File, Format Version 9.00
+-# Visual C# Express 2005
+-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenDesktop", "OpenDesktop\OpenDesktop.csproj", "{C9701934-2BA6-4BFD-9665-B5640B00387A}"
++?Microsoft Visual Studio Solution File, Format Version 9.00
++# SharpDevelop 2.0.0.1017
++Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenDesktop", "OpenDesktop\OpenDesktop.csproj", "{61CB7178-B1C3-4C40-88FC-29A417A7A705}"
+ EndProject
+-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ODIPlugin", "ODIPlugin\ODIPlugin.csproj", "{99E38044-8BFC-4805-94F9-84C275E3120D}"
++Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "IPlugin", "IPlugin\IPlugin.csproj", "{3668A126-BE07-4692-82C4-B061F1212105}"
+ EndProject
+-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YammyPlugin", "YammyPlugin\YammyPlugin.csproj", "{4962C2AD-3120-4189-9667-53E364E3ECFC}"
++Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Localization", "Localization\Localization.csproj", "{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}"
+ EndProject
++Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YammyPlugin", "YammyPlugin\YammyPlugin.csproj", "{AA685A7C-57F2-441B-A789-F1BF218FAF8D}"
++EndProject
+ Global
+ 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+ 		Debug|Any CPU = Debug|Any CPU
+ 		Release|Any CPU = Release|Any CPU
+ 	EndGlobalSection
+ 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+-		{C9701934-2BA6-4BFD-9665-B5640B00387A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+-		{C9701934-2BA6-4BFD-9665-B5640B00387A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+-		{C9701934-2BA6-4BFD-9665-B5640B00387A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+-		{C9701934-2BA6-4BFD-9665-B5640B00387A}.Release|Any CPU.Build.0 = Release|Any CPU
+-		{99E38044-8BFC-4805-94F9-84C275E3120D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+-		{99E38044-8BFC-4805-94F9-84C275E3120D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+-		{99E38044-8BFC-4805-94F9-84C275E3120D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+-		{99E38044-8BFC-4805-94F9-84C275E3120D}.Release|Any CPU.Build.0 = Release|Any CPU
+-		{4962C2AD-3120-4189-9667-53E364E3ECFC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+-		{4962C2AD-3120-4189-9667-53E364E3ECFC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+-		{4962C2AD-3120-4189-9667-53E364E3ECFC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+-		{4962C2AD-3120-4189-9667-53E364E3ECFC}.Release|Any CPU.Build.0 = Release|Any CPU
++		{AA685A7C-57F2-441B-A789-F1BF218FAF8D}.Debug|Any CPU.Build.0 = Debug|Any CPU
++		{AA685A7C-57F2-441B-A789-F1BF218FAF8D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{AA685A7C-57F2-441B-A789-F1BF218FAF8D}.Release|Any CPU.Build.0 = Release|Any CPU
++		{AA685A7C-57F2-441B-A789-F1BF218FAF8D}.Release|Any CPU.ActiveCfg = Release|Any CPU
++		{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}.Debug|Any CPU.Build.0 = Debug|Any CPU
++		{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}.Release|Any CPU.Build.0 = Release|Any CPU
++		{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}.Release|Any CPU.ActiveCfg = Release|Any CPU
++		{3668A126-BE07-4692-82C4-B061F1212105}.Debug|Any CPU.Build.0 = Debug|Any CPU
++		{3668A126-BE07-4692-82C4-B061F1212105}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{3668A126-BE07-4692-82C4-B061F1212105}.Release|Any CPU.Build.0 = Release|Any CPU
++		{3668A126-BE07-4692-82C4-B061F1212105}.Release|Any CPU.ActiveCfg = Release|Any CPU
++		{61CB7178-B1C3-4C40-88FC-29A417A7A705}.Debug|Any CPU.Build.0 = Debug|Any CPU
++		{61CB7178-B1C3-4C40-88FC-29A417A7A705}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{61CB7178-B1C3-4C40-88FC-29A417A7A705}.Release|Any CPU.Build.0 = Release|Any CPU
++		{61CB7178-B1C3-4C40-88FC-29A417A7A705}.Release|Any CPU.ActiveCfg = Release|Any CPU
++		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Debug|Any CPU.Build.0 = Debug|Any CPU
++		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Release|Any CPU.Build.0 = Release|Any CPU
++		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Release|Any CPU.ActiveCfg = Release|Any CPU
+ 	EndGlobalSection
+-	GlobalSection(SolutionProperties) = preSolution
+-		HideSolutionNode = FALSE
+-	EndGlobalSection
+ EndGlobal
+
+Modified: trunk/WebRoot/config.html
+===================================================================
+--- trunk/WebRoot/config.html	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/WebRoot/config.html	2006-01-22 11:25:28 UTC (rev 12)
+@@ -1,37 +1,36 @@
+ ?<html>
+ <head>
+-<title>Configure OpenDesktop Search</title>
++<title>Configure OpenDesktop</title>
+ <link rel=stylesheet type="text/css" href="style.css">
+ </head>
+-<body>
+ <div class="container">
+-	<div class="header"><a href="http://opendesktop.berlios.de">Website</a></div>
++	<div class="header"><a href="http://opendesktop.berlios.de">Website</a>
++	</div>
+ 	<div class="content">
+-	<form action="search.html" method="get" class="search">
+-	<img src="logo-small.gif" align="top" />
+-	<h1>Configure OpenDesktop Search</h1>
+-		<table>
+-		<tr>
+-		<td>Index Path</td>
+-		<td><input type="text" name="IndexPath" value="" size="40" /></td>
+-		</tr>
+-		<tr>
+-		<td>Temporary Index Path</td>
+-		<td><input type="text" name="TempIndexPath" value="" size="40" /></td>
+-		</tr>
+-		<tr>
+-		<td colspan="2"><input type="checkbox" name="StartOnWindowsStartup" value="checked"/>Start OpenDesktop Search when Windows starts</td>
+-		</tr>
+-		<tr>
+-		<td colspan="2"><input type="checkbox" name="LaunchLinksNewWindow" value="checked"/>Launch links in new window <!-- this is for things when user clicks on a search result --></td>
+-		</tr>
++	<div style="text-align:center">
++		<img src="logo.gif"/>
++		<div class="settings">
++		<h1>Configure OpenDesktop</h1>
++		<$OpenDesktopSettings$>
++		<form action="config.html" method="post">
++		<table cellspacing="2" cellpadding="2" border="0">
++		<tr><td colspan="2"><b>Index Settings:</b></td></tr>
++		<tr><td>Index Path:</td><td><input type="file" name="IndexPath" value="IndexPath" /></td></tr>
++		<tr><td>Temp Path:</td><td><input type="file" name="TempPath" /></td></tr>
++		<tr><td>Update Frequency:</td><td><input type="text" name="UpdateFrequency" size="4" />hrs</td></tr>
++		<tr><td colspan="2"><b>Startup:</b></td></tr>
++		<tr><td colspan="2"><input type="checkbox" name="LaunchAtStartup" /> Launch OpenDesktop when windows starts</td></tr>
++		<tr><td colspan="2"><b>Browser Settings:</b></td></tr>
++		<tr><td colspan="2"><input type="checkbox" name="LaunchAtStartup" /> Launch links in new window</td></tr>
+ 		</table>
+-	<input type="submit" value="Save Settings" />
+-	</form>
++		<p align="center"><input type="submit" value="Save Settings" /></p>
++		</form>
++		<!-- <span class="setup-button"><a href="intro2.html">Next Step</a></span> -->
++		</div>
+ 	</div>
++	</div>
+ 	<div class="footer">
+ 	OpenDesktop Search &copy; 2005-2006, Pravin Paratey
+ 	</div>
+ </div>
+-</body>
+ </html>
+\ No newline at end of file
+
+Modified: trunk/WebRoot/index.html
+===================================================================
+--- trunk/WebRoot/index.html	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/WebRoot/index.html	2006-01-22 11:25:28 UTC (rev 12)
+@@ -1,6 +1,6 @@
+ ?<html>
+ <head>
+-<title>OpenDesktop <$YammyVersion$></title>
++<title>OpenDesktop</title>
+ <link rel=stylesheet type="text/css" href="style.css">
+ </head>
+ <div class="container">
+@@ -13,10 +13,12 @@
+ 			<form action="search.html" method="get" class="search">
+ 			<input type="text" name="search" value="" size="40" />
+ 			<input type="submit" value="Search" />
++			<p><i>x documents indexed</i></p>
+ 			<!--
+ 			<br />
+ 			<input type="radio" name="searchdomain" value="all" />All Sites 
+-			<input type="radio" name="searchdomain" value="current" />Current Site -->
++			<input type="radio" name="searchdomain" value="current" />Current Site
++			-->
+ 			</form>
+ 		</div>
+ 	</div>
+
+Modified: trunk/WebRoot/style.css
+===================================================================
+--- trunk/WebRoot/style.css	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/WebRoot/style.css	2006-01-22 11:25:28 UTC (rev 12)
+@@ -106,7 +106,7 @@
+ 	font-weight:bold;
+ }
+ 
+-.setup {
++.settings {
+ 	margin:20px auto;
+ 	font-size:12pt;
+ 	font-family:Bookman Old Style, serif;
+@@ -118,12 +118,20 @@
+ 	border:1px solid #fdd;
+ }
+ 
+-.setup input {
+-	border-style:none;
++.box-main_search {
++	margin:20px auto;
++	font-size:12pt;
++	font-family:Bookman Old Style, serif;
++	width:400px;
++	line-height:150%;
++	text-align:left;
++	background:#efe;
++	padding:10px;
++	border:1px solid #fdd;
++}
++
++.yellow-background {
+ 	background:#ffe;
+-	padding:4px;
+-	text-decoration:none;
+-	color:#000;
+ }
+ 
+ .setup-button a {
+
+Added: trunk/YammyPlugin/AssemblyInfo.cs
+===================================================================
+--- trunk/YammyPlugin/AssemblyInfo.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/YammyPlugin/AssemblyInfo.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -0,0 +1,32 @@
++using System.Reflection;
++using System.Runtime.CompilerServices;
++
++// Information about this assembly is defined by the following
++// attributes.
++//
++// change them to the information which is associated with the assembly
++// you compile.
++
++[assembly: AssemblyTitle("")]
++[assembly: AssemblyDescription("")]
++[assembly: AssemblyConfiguration("")]
++[assembly: AssemblyCompany("")]
++[assembly: AssemblyProduct("")]
++[assembly: AssemblyCopyright("")]
++[assembly: AssemblyTrademark("")]
++[assembly: AssemblyCulture("")]
++
++// The assembly version has following format :
++//
++// Major.Minor.Build.Revision
++//
++// You can specify all values by your own or you can build default build and revision
++// numbers with the '*' character (the default):
++
++[assembly: AssemblyVersion("1.0.*")]
++
++// The following attributes specify the key for the sign of your assembly. See the
++// .NET Framework documentation for more information about signing.
++// This is not required, if you don't want signing let these attributes like they're.
++[assembly: AssemblyDelaySign(false)]
++[assembly: AssemblyKeyFile("")]
+
+Modified: trunk/YammyPlugin/Decoder.cs
+===================================================================
+--- trunk/YammyPlugin/Decoder.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/YammyPlugin/Decoder.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -20,8 +20,6 @@
+ using System.Text;
+ using System.Text.RegularExpressions;
+ 
+-using YammyPlugin.Properties;
+-
+ namespace YammyPlugin
+ {
+     /// <summary>
+
+Added: trunk/YammyPlugin/Resources.cs
+===================================================================
+--- trunk/YammyPlugin/Resources.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/YammyPlugin/Resources.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -0,0 +1,44 @@
++// OpenDesktop - A search tool for the Windows desktop
++// Copyright (C) 2005-2006, Pravin Paratey (pravinp at gmail dot com)
++// http://opendesktop.berlios.de
++//
++// This program is free software; you can redistribute it and/or
++// modify it under the terms of the GNU General Public License
++// as published by the Free Software Foundation; either version 2
++// of the License, or (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program; if not, write to the Free Software
++// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
++
++using System;
++
++namespace YammyPlugin
++{
++	/// <summary>
++	/// Localizable resources for YammyPlugin
++	/// </summary>
++	public class Resources
++	{
++		public static string IndexTitle
++		{
++			get
++			{
++				return "Conversation between {0} and {1}";
++			}
++		}
++		
++		public static string ConversationStarted
++		{
++			get 
++			{
++				return "Conversation Started on {0}";
++			}
++		}
++	}
++}
+
+Modified: trunk/YammyPlugin/YammyPlugin.cs
+===================================================================
+--- trunk/YammyPlugin/YammyPlugin.cs	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/YammyPlugin/YammyPlugin.cs	2006-01-22 11:25:28 UTC (rev 12)
+@@ -23,8 +23,7 @@
+ 
+ using Microsoft.Win32;
+ 
+-using ODIPlugin;
+-using YammyPlugin.Properties;
++using OpenDesktop.Plugin;
+ 
+ namespace YammyPlugin
+ {
+@@ -120,7 +119,7 @@
+                     {
+                         string strFilePath = Uri.UnescapeDataString(strPath);
+                         Decoder d = new Decoder(strFilePath);
+-                        strText = string.Format(Properties.Resources.IndexTitle, d.LocalID, d.RemoteID);
++                        strText = string.Format(Resources.IndexTitle, d.LocalID, d.RemoteID);
+                     }
+                 }
+             }
+
+Modified: trunk/YammyPlugin/YammyPlugin.csproj
+===================================================================
+--- trunk/YammyPlugin/YammyPlugin.csproj	2006-01-22 11:20:28 UTC (rev 11)
++++ trunk/YammyPlugin/YammyPlugin.csproj	2006-01-22 11:25:28 UTC (rev 12)
+@@ -2,70 +2,50 @@
+   <PropertyGroup>
+     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+-    <ProductVersion>8.0.50727</ProductVersion>
+     <SchemaVersion>2.0</SchemaVersion>
+-    <ProjectGuid>{4962C2AD-3120-4189-9667-53E364E3ECFC}</ProjectGuid>
+-    <OutputType>Library</OutputType>
+-    <AppDesignerFolder>Properties</AppDesignerFolder>
++    <ProjectGuid>{AA685A7C-57F2-441B-A789-F1BF218FAF8D}</ProjectGuid>
+     <RootNamespace>YammyPlugin</RootNamespace>
+     <AssemblyName>YammyPlugin</AssemblyName>
++    <OutputType>Library</OutputType>
++    <WarningLevel>4</WarningLevel>
++    <NoStdLib>False</NoStdLib>
++    <NoConfig>False</NoConfig>
++    <RunPostBuildEvent>OnSuccessfulBuild</RunPostBuildEvent>
+   </PropertyGroup>
+   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+-    <DebugSymbols>true</DebugSymbols>
+-    <DebugType>full</DebugType>
+-    <Optimize>false</Optimize>
+-    <OutputPath>..\OpenDesktop\bin\Debug\</OutputPath>
+-    <DefineConstants>DEBUG;TRACE</DefineConstants>
+-    <ErrorReport>prompt</ErrorReport>
+-    <WarningLevel>4</WarningLevel>
++    <DebugSymbols>True</DebugSymbols>
++    <Optimize>False</Optimize>
++    <AllowUnsafeBlocks>False</AllowUnsafeBlocks>
++    <CheckForOverflowUnderflow>True</CheckForOverflowUnderflow>
++    <OutputPath>bin\Debug\</OutputPath>
++    <TreatWarningsAsErrors>False</TreatWarningsAsErrors>
+   </PropertyGroup>
+   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+-    <DebugType>pdbonly</DebugType>
+-    <Optimize>false</Optimize>
+-    <OutputPath>..\OpenDesktop\bin\Release\</OutputPath>
+-    <DefineConstants>DEBUG;TRACE</DefineConstants>
+-    <ErrorReport>prompt</ErrorReport>
+-    <WarningLevel>4</WarningLevel>
+-    <GenerateSerializationAssemblies>Auto</GenerateSerializationAssemblies>
++    <DebugSymbols>False</DebugSymbols>
++    <Optimize>True</Optimize>
++    <AllowUnsafeBlocks>False</AllowUnsafeBlocks>
++    <CheckForOverflowUnderflow>False</CheckForOverflowUnderflow>
++    <OutputPath>bin\Release\</OutputPath>
++    <TreatWarningsAsErrors>False</TreatWarningsAsErrors>
+   </PropertyGroup>
+   <ItemGroup>
+     <Reference Include="System" />
+     <Reference Include="System.Data" />
++    <Reference Include="System.Drawing" />
++    <Reference Include="System.Windows.Forms" />
+     <Reference Include="System.Xml" />
+   </ItemGroup>
+   <ItemGroup>
+-    <Compile Include="Decoder.cs" />
+-    <Compile Include="Properties\Resources.Designer.cs">
+-      <AutoGen>True</AutoGen>
+-      <DesignTime>True</DesignTime>
+-      <DependentUpon>Resources.resx</DependentUpon>
+-    </Compile>
++    <Compile Include="AssemblyInfo.cs" />
+     <Compile Include="YammyPlugin.cs" />
+-    <Compile Include="Properties\AssemblyInfo.cs" />
++    <Compile Include="Decoder.cs" />
++    <Compile Include="Resources.cs" />
+   </ItemGroup>
+   <ItemGroup>
+-    <ProjectReference Include="..\ODIPlugin\ODIPlugin.csproj">
+-      <Project>{99E38044-8BFC-4805-94F9-84C275E3120D}</Project>
+-      <Name>ODIPlugin</Name>
++    <ProjectReference Include="..\IPlugin\IPlugin.csproj">
++      <Project>{3668A126-BE07-4692-82C4-B061F1212105}</Project>
++      <Name>IPlugin</Name>
+     </ProjectReference>
+   </ItemGroup>
+-  <ItemGroup>
+-    <EmbeddedResource Include="Properties\Resources.resx">
+-      <SubType>Designer</SubType>
+-      <Generator>ResXFileCodeGenerator</Generator>
+-      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+-    </EmbeddedResource>
+-  </ItemGroup>
+-  <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
+-  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+-       Other similar extension points exist, see Microsoft.Common.targets.
+-  <Target Name="BeforeBuild">
+-  </Target>
+-  <Target Name="AfterBuild">
+-  </Target>
+-  -->
+-  <PropertyGroup>
+-    <PostBuildEvent>
+-    </PostBuildEvent>
+-  </PropertyGroup>
++  <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.Targets" />
+ </Project>
+\ No newline at end of file
+
+
+
+From pravin at berlios.de  Sat Jan 28 18:27:07 2006
+From: pravin at berlios.de (pravin at BerliOS)
+Date: Sat, 28 Jan 2006 18:27:07 +0100
+Subject: [Opendesktop-svn] r13 - in trunk: . CommonFileTypes OpenDesktop
+Message-ID: <200601281727.k0SHR7Os030413@sheep.berlios.de>
+
+Author: pravin
+Date: 2006-01-28 18:27:06 +0100 (Sat, 28 Jan 2006)
+New Revision: 13
+
+Added:
+   trunk/CommonFileTypes/
+   trunk/CommonFileTypes/AssemblyInfo.cs
+   trunk/CommonFileTypes/CommonFileTypes.csproj
+   trunk/CommonFileTypes/TextIndexer.cs
+Modified:
+   trunk/OpenDesktop.sln
+   trunk/OpenDesktop/FileExplorer.cs
+   trunk/OpenDesktop/IndexGeneration.cs
+   trunk/OpenDesktop/Indexer.cs
+   trunk/OpenDesktop/OpenDesktop.csproj
+   trunk/OpenDesktop/ReplaceTag.cs
+   trunk/OpenDesktop/ToDo.txt
+Log:
+o TextIndexer to index txt files
+o Indexer replaces < and > with &gt; and &lt; so as to not interfere with html tags
+o Search result bullet number shown in IE also (wasnt shown earlier because IE renders differently)
+
+Added: trunk/CommonFileTypes/AssemblyInfo.cs
+===================================================================
+--- trunk/CommonFileTypes/AssemblyInfo.cs	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/CommonFileTypes/AssemblyInfo.cs	2006-01-28 17:27:06 UTC (rev 13)
+@@ -0,0 +1,27 @@
++using System.Reflection;
++using System.Runtime.CompilerServices;
++
++// Information about this assembly is defined by the following
++// attributes.
++//
++// change them to the information which is associated with the assembly
++// you compile.
++
++[assembly: AssemblyTitle("")]
++[assembly: AssemblyDescription("")]
++[assembly: AssemblyConfiguration("")]
++[assembly: AssemblyCompany("")]
++[assembly: AssemblyProduct("")]
++[assembly: AssemblyCopyright("")]
++[assembly: AssemblyTrademark("")]
++[assembly: AssemblyCulture("")]
++
++// The assembly version has following format :
++//
++// Major.Minor.Build.Revision
++//
++// You can specify all values by your own or you can build default build and revision
++// numbers with the '*' character (the default):
++
++[assembly: AssemblyVersion("1.0.*")]
++
+
+Added: trunk/CommonFileTypes/CommonFileTypes.csproj
+===================================================================
+--- trunk/CommonFileTypes/CommonFileTypes.csproj	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/CommonFileTypes/CommonFileTypes.csproj	2006-01-28 17:27:06 UTC (rev 13)
+@@ -0,0 +1,41 @@
++?<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
++  <PropertyGroup>
++    <OutputType>Library</OutputType>
++    <RootNamespace>CommonFileTypes</RootNamespace>
++    <AssemblyName>CommonFileTypes</AssemblyName>
++    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
++    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
++    <ProjectGuid>{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}</ProjectGuid>
++  </PropertyGroup>
++  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
++    <OutputPath>bin\Debug\</OutputPath>
++    <Optimize>False</Optimize>
++    <DefineConstants>DEBUG;TRACE</DefineConstants>
++    <DebugSymbols>True</DebugSymbols>
++    <DebugType>Full</DebugType>
++    <CheckForOverflowUnderflow>True</CheckForOverflowUnderflow>
++  </PropertyGroup>
++  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
++    <OutputPath>bin\Release\</OutputPath>
++    <Optimize>True</Optimize>
++    <DefineConstants>TRACE</DefineConstants>
++    <DebugSymbols>False</DebugSymbols>
++    <DebugType>None</DebugType>
++    <CheckForOverflowUnderflow>False</CheckForOverflowUnderflow>
++  </PropertyGroup>
++  <ItemGroup>
++    <Reference Include="System" />
++    <Reference Include="System.Xml" />
++  </ItemGroup>
++  <ItemGroup>
++    <Compile Include="AssemblyInfo.cs" />
++    <Compile Include="TextIndexer.cs" />
++  </ItemGroup>
++  <ItemGroup>
++    <ProjectReference Include="..\IPlugin\IPlugin.csproj">
++      <Project>{3668A126-BE07-4692-82C4-B061F1212105}</Project>
++      <Name>IPlugin</Name>
++    </ProjectReference>
++  </ItemGroup>
++  <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.Targets" />
++</Project>
+\ No newline at end of file
+
+Added: trunk/CommonFileTypes/TextIndexer.cs
+===================================================================
+--- trunk/CommonFileTypes/TextIndexer.cs	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/CommonFileTypes/TextIndexer.cs	2006-01-28 17:27:06 UTC (rev 13)
+@@ -0,0 +1,98 @@
++/*
++ * Created by SharpDevelop.
++ * User: pravin
++ * Date: 1/22/2006
++ * Time: 8:27 PM
++ * 
++ * To change this template use Tools | Options | Coding | Edit Standard Headers.
++ */
++
++using System;
++using System.IO;
++using System.Collections.Specialized;
++
++using OpenDesktop.Plugin;
++
++namespace OpenDesktop.CommonIndexables
++{
++	/// <summary>
++	/// Responsible for indexing Text file
++	/// </summary>
++	public class TextIndexer : IPlugin
++	{
++		#region Member Vars
++		private string[] m_strRegisteredExtensions = { ".txt" };
++        private string[] m_strRegisteredHTMLTags = { "DisplayText" };
++        #endregion
++        
++		public TextIndexer()
++		{
++		}
++		
++		public string[] RegisteredHTMLTags
++		{
++			get
++			{
++				return m_strRegisteredHTMLTags;
++			}
++		}
++
++        public string PluginName 
++        {
++            get
++            {
++                return "Text Indexer";
++            }
++        }
++
++        public string[] RegisteredFileExtentions 
++        {
++            get
++            {
++                return m_strRegisteredExtensions;
++            }
++        }
++        
++        public string ProcessTag(string tag, NameValueCollection queryString)
++        {
++        	return string.Empty;
++        }
++        
++        public SearchInfo ProcessFile(string filePath)
++        {
++        	FileInfo finfo = null;
++        	SearchInfo sinfo = null;
++        	try
++        	{
++        		finfo = new FileInfo(filePath);
++        	}
++        	catch 
++        	{
++        		return null;
++        	}
++
++        	if(finfo.Length > 1 * 1024 * 1024)
++    		{
++    			return null;
++    		}
++        	
++        	string strContent = null;
++        	try
++        	{
++	        	StreamReader reader = new StreamReader(filePath);
++	        	strContent = reader.ReadToEnd();
++	        	reader.Close();
++        	}
++        	catch
++        	{
++        		return null;
++        	}
++        	
++        	string strTitle = finfo.Name;
++        	string strLauncher = "file:///" + filePath;
++        	
++        	sinfo = new SearchInfo(strTitle, strContent, strLauncher);
++        	return sinfo;
++        }
++	}
++}
+
+Modified: trunk/OpenDesktop/FileExplorer.cs
+===================================================================
+--- trunk/OpenDesktop/FileExplorer.cs	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop/FileExplorer.cs	2006-01-28 17:27:06 UTC (rev 13)
+@@ -140,7 +140,7 @@
+ 				Logger.Instance.LogException(e);
+ 			}
+ 		}
+-
++/*
+ 		public void Pause()
+ 		{
+ 			if (m_objThread != null && m_objThread.ThreadState == ThreadState.Running)
+@@ -156,16 +156,14 @@
+ 				m_objThread.Resume();
+ 			}
+ 		}
+-
++*/
+ 		public void Stop()
+ 		{
+ 			_quit = true;
+ 		}
+ 		#endregion
+ 
+-		/// <summary>
+-		/// Explores
+-		/// </summary>
++		#region Explore
+ 		private void Explore()
+ 		{
+ 			string [] strDriveList = Environment.GetLogicalDrives();
+@@ -189,7 +187,6 @@
+ 				m_indexer.Close(); m_indexer = null;
+ 
+ 				// Lock the index as we are going to be moving it
+-				// FIXME: RACE CONDITION!!!! The code below is useless
+ 				Synchronizer.Instance.LockIndex(this);
+ 				try
+ 				{
+@@ -261,7 +258,7 @@
+ 					}
+ 				}
+ 				
+-				if(m_bAgressive)
++				if(!m_bAgressive)
+ 					Thread.Sleep(100);
+ 			}
+ 			foreach (string strDir in strDirList)
+@@ -278,5 +275,6 @@
+ 				}
+ 			}
+ 		}
++		#endregion
+ 	}
+ }
+
+Modified: trunk/OpenDesktop/IndexGeneration.cs
+===================================================================
+--- trunk/OpenDesktop/IndexGeneration.cs	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop/IndexGeneration.cs	2006-01-28 17:27:06 UTC (rev 13)
+@@ -88,7 +88,7 @@
+ 			this.lblFilePath.Text = currentFile;
+ 		}
+ 		
+-		public void Dispose()
++		public new void Dispose()
+ 		{
+ 			this.Hide();
+ 			this.Close();
+
+Modified: trunk/OpenDesktop/Indexer.cs
+===================================================================
+--- trunk/OpenDesktop/Indexer.cs	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop/Indexer.cs	2006-01-28 17:27:06 UTC (rev 13)
+@@ -128,9 +128,13 @@
+ 			bool retVal = false;
+ 			if (m_bSucess && (m_indexMode == IndexMode.CREATE || m_indexMode == IndexMode.APPEND))
+ 			{
++				// README: This is so that < and > don't interfere with existing
++				// tags in the browser
++				string strText = info.Text.Replace("<", "&lt;").Replace(">", "&gt;");
++				
+ 				Document doc = new Document();
+ 				doc.Add(Field.UnIndexed("title", info.Title));
+-				doc.Add(Field.Text("content", info.Text));
++				doc.Add(Field.Text("content", strText));
+ 				doc.Add(Field.UnIndexed("launcher", info.Launcher));
+ 				m_indexWriter.AddDocument(doc);
+ 				retVal = true;
+
+Modified: trunk/OpenDesktop/OpenDesktop.csproj
+===================================================================
+--- trunk/OpenDesktop/OpenDesktop.csproj	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop/OpenDesktop.csproj	2006-01-28 17:27:06 UTC (rev 13)
+@@ -57,7 +57,9 @@
+     <EmbeddedResource Include="OpenDesktop.resources">
+       <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+     </EmbeddedResource>
+-    <Compile Include="IndexGeneration.cs" />
++    <Compile Include="IndexGeneration.cs">
++      <SubType>Form</SubType>
++    </Compile>
+     <EmbeddedResource Include="IndexGeneration.resx">
+       <DependentUpon>IndexGeneration.cs</DependentUpon>
+     </EmbeddedResource>
+
+Modified: trunk/OpenDesktop/ReplaceTag.cs
+===================================================================
+--- trunk/OpenDesktop/ReplaceTag.cs	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop/ReplaceTag.cs	2006-01-28 17:27:06 UTC (rev 13)
+@@ -161,15 +161,15 @@
+                     string.Format(Properties.Resources.SearchResultsHeader,
+                     (iStartAt + 1).ToString(), iEndAt.ToString(),
+                     sinfo.Length.ToString(), strSearchTerm) + "</div>");
+-                sb.Append("<ol class=\"search-results\">");
++                sb.Append("<div class=\"search-results\"><ol>");
+ 
+                 for (int i = iStartAt; i < iEndAt; i++)
+                 {
+                     string strDisplayText = GetExcerpt(sinfo[i].Text, strSearchTerm);
+                     sb.Append("<li value=\"" + (i+1).ToString() + "\"><a href=\"" + sinfo[i].Launcher + 
+-                        "\">" + sinfo[i].Title + "</a><br />" + strDisplayText + "</li>");
++                        "\"><span style=\"font-size:12pt\">" + sinfo[i].Title + "</span></a><br />" + strDisplayText + "</li>");
+                 }
+-                sb.Append("</ol>");
++                sb.Append("</ol></div>");
+                 int iCurPageNum = (iStartAt/10);
+                 string strPrevUrl = string.Empty;
+                 string strNextUrl = string.Empty;
+
+Modified: trunk/OpenDesktop/ToDo.txt
+===================================================================
+--- trunk/OpenDesktop/ToDo.txt	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop/ToDo.txt	2006-01-28 17:27:06 UTC (rev 13)
+@@ -1,6 +1,4 @@
+ - Weird Lucene results for words "a b" and "b a" interchanged. 
+   For one, number of results differ!
+-- favicon.ico must go as image/ico DONE
+-- config must ask user where the index directory will be
+-- Monitor locks used in Synchronizer. Are they okay?
+-- Implement DNV
+\ No newline at end of file
++- Implement DNV
++- Add x documents indexed
+\ No newline at end of file
+
+Modified: trunk/OpenDesktop.sln
+===================================================================
+--- trunk/OpenDesktop.sln	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop.sln	2006-01-28 17:27:06 UTC (rev 13)
+@@ -8,6 +8,8 @@
+ EndProject
+ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YammyPlugin", "YammyPlugin\YammyPlugin.csproj", "{AA685A7C-57F2-441B-A789-F1BF218FAF8D}"
+ EndProject
++Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CommonFileTypes", "CommonFileTypes\CommonFileTypes.csproj", "{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}"
++EndProject
+ Global
+ 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+ 		Debug|Any CPU = Debug|Any CPU
+@@ -34,5 +36,9 @@
+ 		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+ 		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Release|Any CPU.Build.0 = Release|Any CPU
+ 		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Release|Any CPU.ActiveCfg = Release|Any CPU
++		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Debug|Any CPU.Build.0 = Debug|Any CPU
++		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Release|Any CPU.Build.0 = Release|Any CPU
++		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+ 	EndGlobalSection
+ EndGlobal
+
+
+

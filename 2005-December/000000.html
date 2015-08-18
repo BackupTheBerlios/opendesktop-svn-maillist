@@ -1,0 +1,421 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<HTML>
+ <HEAD>
+   <TITLE> [Opendesktop-svn] r4 - in trunk: OpenDesktop WebRoot YammyPlugin
+   </TITLE>
+   <LINK REL="Index" HREF="http://lists.berlios.de/pipermail/opendesktop-svn/2005-December/index.html" >
+   <LINK REL="made" HREF="mailto:opendesktop-svn%40lists.berlios.de?Subject=Re%3A%20%5BOpendesktop-svn%5D%20r4%20-%20in%20trunk%3A%20OpenDesktop%20WebRoot%20YammyPlugin&In-Reply-To=%3C200512311608.jBVG8PuL018081%40sheep.berlios.de%3E">
+   <META NAME="robots" CONTENT="index,nofollow">
+   <style type="text/css">
+       pre {
+           white-space: pre-wrap;       /* css-2.1, curent FF, Opera, Safari */
+           }
+   </style>
+   <META http-equiv="Content-Type" content="text/html; charset=us-ascii">
+   
+   
+ </HEAD>
+ <BODY BGCOLOR="#ffffff">
+   <H1>[Opendesktop-svn] r4 - in trunk: OpenDesktop WebRoot YammyPlugin</H1>
+    <B>pravin at BerliOS</B> 
+    <A HREF="mailto:opendesktop-svn%40lists.berlios.de?Subject=Re%3A%20%5BOpendesktop-svn%5D%20r4%20-%20in%20trunk%3A%20OpenDesktop%20WebRoot%20YammyPlugin&In-Reply-To=%3C200512311608.jBVG8PuL018081%40sheep.berlios.de%3E"
+       TITLE="[Opendesktop-svn] r4 - in trunk: OpenDesktop WebRoot YammyPlugin">pravin at berlios.de
+       </A><BR>
+    <I>Sat Dec 31 17:08:25 CET 2005</I>
+    <P><UL>
+        
+        
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#0">[ date ]</a>
+              <a href="thread.html#0">[ thread ]</a>
+              <a href="subject.html#0">[ subject ]</a>
+              <a href="author.html#0">[ author ]</a>
+         </LI>
+       </UL>
+    <HR>  
+<!--beginarticle-->
+<PRE>Author: pravin
+Date: 2005-12-31 17:08:25 +0100 (Sat, 31 Dec 2005)
+New Revision: 4
+
+Removed:
+   trunk/OpenDesktop/OpenDesktop.csproj.user
+   trunk/OpenDesktop/OpenDesktop.xml
+Modified:
+   trunk/OpenDesktop/Program.cs
+   trunk/OpenDesktop/ReplaceTag.cs
+   trunk/WebRoot/logo.gif
+   trunk/YammyPlugin/Decoder.cs
+Log:
+- Added SingleInstance, CleanData in Decoder and GetExcerpt functions
+
+Deleted: trunk/OpenDesktop/OpenDesktop.csproj.user
+===================================================================
+--- trunk/OpenDesktop/OpenDesktop.csproj.user	2005-12-25 15:36:39 UTC (rev 3)
++++ trunk/OpenDesktop/OpenDesktop.csproj.user	2005-12-31 16:08:25 UTC (rev 4)
+@@ -1,16 +0,0 @@
+-&#65279;&lt;Project xmlns=&quot;<A HREF="http://schemas.microsoft.com/developer/msbuild/2003">http://schemas.microsoft.com/developer/msbuild/2003</A>&quot;&gt;
+-  &lt;PropertyGroup&gt;
+-    &lt;PublishUrlHistory&gt;publish\&lt;/PublishUrlHistory&gt;
+-    &lt;InstallUrlHistory&gt;
+-    &lt;/InstallUrlHistory&gt;
+-    &lt;SupportUrlHistory&gt;
+-    &lt;/SupportUrlHistory&gt;
+-    &lt;UpdateUrlHistory&gt;
+-    &lt;/UpdateUrlHistory&gt;
+-    &lt;BootstrapperUrlHistory&gt;
+-    &lt;/BootstrapperUrlHistory&gt;
+-    &lt;ApplicationRevision&gt;0&lt;/ApplicationRevision&gt;
+-    &lt;FallbackCulture&gt;en-US&lt;/FallbackCulture&gt;
+-    &lt;VerifyUploadedFiles&gt;false&lt;/VerifyUploadedFiles&gt;
+-  &lt;/PropertyGroup&gt;
+-&lt;/Project&gt;
+\ No newline at end of file
+
+Deleted: trunk/OpenDesktop/OpenDesktop.xml
+===================================================================
+--- trunk/OpenDesktop/OpenDesktop.xml	2005-12-25 15:36:39 UTC (rev 3)
++++ trunk/OpenDesktop/OpenDesktop.xml	2005-12-31 16:08:25 UTC (rev 4)
+@@ -1,180 +0,0 @@
+-&lt;?xml version=&quot;1.0&quot;?&gt;
+-&lt;doc&gt;
+-    &lt;assembly&gt;
+-        &lt;name&gt;OpenDesktop&lt;/name&gt;
+-    &lt;/assembly&gt;
+-    &lt;members&gt;
+-        &lt;member name=&quot;T:OpenDesktop.NameObjectCollection&quot;&gt;
+-            &lt;summary&gt;
+-            This class is like NameValueCollection but instead of storing string values
+-            it stores Object values. It is much more limited in functionality.
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;M:OpenDesktop.NameObjectCollection.Add(System.Object,System.Object)&quot;&gt;
+-            &lt;summary&gt;
+-            Add a key/value pair to the NameObjectCollection
+-            &lt;/summary&gt;
+-            &lt;param name=&quot;key&quot;&gt;key&lt;/param&gt;
+-            &lt;param name=&quot;value&quot;&gt;value&lt;/param&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;M:OpenDesktop.NameObjectCollection.Get(System.Object)&quot;&gt;
+-            &lt;summary&gt;
+-            Gets the value(s) associated with the key
+-            &lt;/summary&gt;
+-            &lt;param name=&quot;key&quot;&gt;query key&lt;/param&gt;
+-            &lt;returns&gt;ArrayList of values&lt;/returns&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.ContentType.HTML&quot;&gt;
+-            &lt;summary&gt;
+-            returns text/html
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.ContentType.CSS&quot;&gt;
+-            &lt;summary&gt;
+-            returns text/css
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.ContentType.IMAGE_JPEG&quot;&gt;
+-            &lt;summary&gt;
+-            returns image/jpg
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.ContentType.IMAGE_GIF&quot;&gt;
+-            &lt;summary&gt;
+-            returns image/gif
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.ContentType.IMAGE_PNG&quot;&gt;
+-            &lt;summary&gt;
+-            returns image/png
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;T:OpenDesktop.WebServer&quot;&gt;
+-            &lt;summary&gt;
+-            WebServer class. This class is responsible for:
+-            1. Creating a server and listening for connections.
+-            2. On connect, extract GET or POST string.
+-            3. Open target page and parse it.
+-            4. While parsing, call appropriate functions and create output page.
+-            5. Display output page.
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;M:OpenDesktop.WebServer.ProcessRequest(System.Object)&quot;&gt;
+-            &lt;summary&gt;
+-            
+-            &lt;/summary&gt;
+-            &lt;param name=&quot;socket&quot;&gt;&lt;/param&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;M:OpenDesktop.WebServer.CreateHeader(OpenDesktop.HttpResponseCode,System.String,System.Int32)&quot;&gt;
+-            &lt;summary&gt;
+-            Creates a HTTP 1.1 header string to return to browsers
+-            &lt;/summary&gt;
+-            &lt;param name=&quot;status&quot;&gt;Status Number ex. 200 for OK, 404 for file not found&lt;/param&gt;
+-            &lt;param name=&quot;contentType&quot;&gt;content type of the response body&lt;/param&gt;
+-            &lt;param name=&quot;contentLength&quot;&gt;length of response body&lt;/param&gt;
+-            &lt;returns&gt;header string&lt;/returns&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;M:OpenDesktop.WebServer.ValidateRequest(System.String)&quot;&gt;
+-            &lt;summary&gt;
+-            
+-            &lt;/summary&gt;
+-            &lt;param name=&quot;request&quot;&gt;&lt;/param&gt;
+-            &lt;returns&gt;Returns uri object on success else null&lt;/returns&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;T:OpenDesktop.Properties.Resources&quot;&gt;
+-            &lt;summary&gt;
+-              A strongly-typed resource class, for looking up localized strings, etc.
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.Properties.Resources.ResourceManager&quot;&gt;
+-            &lt;summary&gt;
+-              Returns the cached ResourceManager instance used by this class.
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.Properties.Resources.Culture&quot;&gt;
+-            &lt;summary&gt;
+-              Overrides the current thread's CurrentUICulture property for all
+-              resource lookups using this strongly typed resource class.
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.Properties.Resources.FileNotFound&quot;&gt;
+-            &lt;summary&gt;
+-              Looks up a localized string similar to 404 - File Not Found.
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.Properties.Resources.ServerString&quot;&gt;
+-            &lt;summary&gt;
+-              Looks up a localized string similar to Open Desktop Search 0.1.
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.Properties.Resources.TrayMenuExit&quot;&gt;
+-            &lt;summary&gt;
+-              Looks up a localized string similar to &amp;Exit.
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.Properties.Resources.TrayMenuOpen&quot;&gt;
+-            &lt;summary&gt;
+-              Looks up a localized string similar to &amp;Open.
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.Properties.Resources.TrayMenuSettings&quot;&gt;
+-            &lt;summary&gt;
+-              Looks up a localized string similar to &amp;Settings.
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;T:OpenDesktop.Logger&quot;&gt;
+-            &lt;summary&gt;
+-            File logger to log messages
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;M:OpenDesktop.Program.Main&quot;&gt;
+-            &lt;summary&gt;
+-            The main entry point for the application.
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;T:OpenDesktop.PluginManager&quot;&gt;
+-            &lt;summary&gt;
+-            Responsible for Managing Plugins
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.PluginManager.RegisteredFileExtensions&quot;&gt;
+-            &lt;summary&gt;
+-            Returns registered file extensions by all plugins
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;P:OpenDesktop.PluginManager.RegisteredHTMLTags&quot;&gt;
+-            &lt;summary&gt;
+-            Returns registered HTML tags by all plugins
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;T:OpenDesktop.TrayIcon&quot;&gt;
+-            &lt;summary&gt;
+-            Responsible for drawing the TrayIcon
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;M:OpenDesktop.TrayIcon.SetStatus(System.String)&quot;&gt;
+-            &lt;summary&gt;
+-            Sets the tooltip of the tray icon
+-            &lt;/summary&gt;
+-            &lt;param name=&quot;status&quot;&gt;&lt;/param&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;T:OpenDesktop.ReplaceTag&quot;&gt;
+-            &lt;summary&gt;
+-            This class is responsible for replacing the 
+-            &lt;/summary&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;M:OpenDesktop.ReplaceTag.#ctor(System.Collections.Specialized.NameValueCollection)&quot;&gt;
+-            &lt;summary&gt;
+-            
+-            &lt;/summary&gt;
+-            &lt;param name=&quot;query&quot;&gt;&lt;/param&gt;
+-        &lt;/member&gt;
+-        &lt;member name=&quot;M:OpenDesktop.ReplaceTag.Replace(System.Text.RegularExpressions.Match)&quot;&gt;
+-            &lt;summary&gt;
+-            
+-            &lt;/summary&gt;
+-            &lt;param name=&quot;m&quot;&gt;&lt;/param&gt;
+-            &lt;returns&gt;&lt;/returns&gt;
+-        &lt;/member&gt;
+-    &lt;/members&gt;
+-&lt;/doc&gt;
+
+Modified: trunk/OpenDesktop/Program.cs
+===================================================================
+--- trunk/OpenDesktop/Program.cs	2005-12-25 15:36:39 UTC (rev 3)
++++ trunk/OpenDesktop/Program.cs	2005-12-31 16:08:25 UTC (rev 4)
+@@ -29,15 +29,33 @@
+         [STAThread]
+         static void Main()
+         {
++            if (AppIsRunning())
++            {
++                return;
++            }
+             WebServer.Instance.Start();
+             TrayIcon trayIcon = new TrayIcon();
+             MessageBox.Show(WebServer.Instance.LocalAddress);
+             FileExplorer fileExplorer = new FileExplorer(PluginManager.Instance.RegisteredFileExtensions);
+             fileExplorer.Run();
++            
+             Application.Run();
++
+             fileExplorer.Stop();
+             WebServer.Instance.Stop();
+             Logger.Instance.Dispose();
+         }
++
++        /// &lt;summary&gt;
++        /// Creates a named mutex and tries to gain ownership. If successful,
++        /// it means it is the only app running. Else another app is running.
++        /// &lt;/summary&gt;
++        /// &lt;returns&gt;True if another instance is running&lt;/returns&gt;
++        static bool AppIsRunning()
++        {
++            bool bCreatedNew;
++            System.Threading.Mutex m = new System.Threading.Mutex(true, &quot;OpenDesktopMutex&quot;, out bCreatedNew);            
++            return !bCreatedNew;
++        }
+     }
+ }
+\ No newline at end of file
+
+Modified: trunk/OpenDesktop/ReplaceTag.cs
+===================================================================
+--- trunk/OpenDesktop/ReplaceTag.cs	2005-12-25 15:36:39 UTC (rev 3)
++++ trunk/OpenDesktop/ReplaceTag.cs	2005-12-31 16:08:25 UTC (rev 4)
+@@ -43,10 +43,10 @@
+         }
+ 
+         /// &lt;summary&gt;
+-        /// 
++        /// Replaces Tags with appropriate string(s) got from the plugin
+         /// &lt;/summary&gt;
+-        /// &lt;param name=&quot;m&quot;&gt;&lt;/param&gt;
+-        /// &lt;returns&gt;&lt;/returns&gt;
++        /// &lt;param name=&quot;m&quot;&gt;Match m&lt;/param&gt;
++        /// &lt;returns&gt;String to replace the match with&lt;/returns&gt;
+         public string Replace(Match m)
+         {
+             string strTag = m.Groups[1].Value;
+@@ -59,8 +59,8 @@
+                 for (int i = 0; i &lt; sinfo.Length; i++)
+                 {
+                     string strDisplayText = GetRelevantText(sinfo[i].Text, strSearchTerm);
+-                    sb.Append(&quot;&lt;div&gt;&lt;a href=\&quot;&quot; + sinfo[i].Launcher + &quot;\&quot;&gt;&quot; + sinfo[i].Title +
+-                        &quot;&lt;/a&gt;&lt;br /&gt;&quot; + strDisplayText + &quot;&lt;/div&gt;&quot;);
++                    sb.Append(&quot;&lt;li&gt;&lt;a href=\&quot;&quot; + sinfo[i].Launcher + &quot;\&quot;&gt;&quot; + sinfo[i].Title +
++                        &quot;&lt;/a&gt;&lt;br /&gt;&quot; + strDisplayText + &quot;&lt;/li&gt;&quot;);
+                 }
+                 m_indexer.Close();
+                 return sb.ToString();
+@@ -76,10 +76,37 @@
+             return m.Value;
+         }
+ 
++        /// &lt;summary&gt;
++        /// Gets a small paragraph of the text to display on the search results page
++        /// &lt;/summary&gt;
++        /// &lt;param name=&quot;text&quot;&gt;The text gotten from the index&lt;/param&gt;
++        /// &lt;param name=&quot;searchTerm&quot;&gt;&lt;/param&gt;
++        /// &lt;returns&gt;small paragraph of text&lt;/returns&gt;
+         string GetRelevantText(string text, string searchTerm)
+         {
++            const int textWindow = 100;
+             string[] searchTerms = searchTerm.Split('+');
++            int iStart = 0;
++            int iEnd = text.Length;
++            foreach (string term in searchTerms)
++            {
++                int position = text.IndexOf(term);
++                if (position &gt;= 0)
++                {
++                    if (position &gt; textWindow)
++                    {
++                        iStart = position - textWindow;
++                    }
+ 
++                    if (position + textWindow &lt; text.Length)
++                    {
++                        iEnd = position + textWindow;
++                    }
++
++                    break;
++                }
++            }
++            return text.Substring(iStart, iEnd - iStart);
+         }
+     }
+ }
+
+Modified: trunk/WebRoot/logo.gif
+===================================================================
+(Binary files differ)
+
+Modified: trunk/YammyPlugin/Decoder.cs
+===================================================================
+--- trunk/YammyPlugin/Decoder.cs	2005-12-25 15:36:39 UTC (rev 3)
++++ trunk/YammyPlugin/Decoder.cs	2005-12-31 16:08:25 UTC (rev 4)
+@@ -233,7 +233,22 @@
+         {
+             string strData = Encoding.UTF8.GetString(data);
+             strData = Regex.Replace(strData, @&quot;\[[^m]+m&quot;, String.Empty);
++            MatchEvaluator matchEval = new MatchEvaluator(CleanDataMatchEval);
++            strData = Regex.Replace(strData, &quot;&lt;([^&gt;]+)&gt;&quot;, matchEval);
+             return strData;
+         }
++
++        private string CleanDataMatchEval(Match m)
++        {
++            string strTag = m.Groups[1].Value;
++            if (strTag.Equals(&quot;ding&quot;))
++            {
++                return @&quot;&lt;span class=&quot;&quot;ding&quot;&quot;&gt;Buzz!&lt;/span&gt;&quot;;
++            }
++            else
++            {
++                return string.Empty;
++            }
++        }
+     }
+ }
+
+
+</PRE>
+
+<!--endarticle-->
+    <HR>
+    <P><UL>
+        <!--threads-->
+	
+	
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#0">[ date ]</a>
+              <a href="thread.html#0">[ thread ]</a>
+              <a href="subject.html#0">[ subject ]</a>
+              <a href="author.html#0">[ author ]</a>
+         </LI>
+       </UL>
+
+<hr>
+<a href="https://lists.berlios.de/mailman/listinfo/opendesktop-svn">More information about the Opendesktop-svn
+mailing list</a><br>
+</body></html>

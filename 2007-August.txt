@@ -1,0 +1,532 @@
+From pravin at mail.berlios.de  Fri Aug 17 08:49:42 2007
+From: pravin at mail.berlios.de (pravin at BerliOS)
+Date: Fri, 17 Aug 2007 08:49:42 +0200
+Subject: [Opendesktop-svn] r14 - in trunk: . CommonFileTypes OpenDesktop
+	WebRoot
+Message-ID: <200708170649.l7H6ngHm013108@sheep.berlios.de>
+
+Author: pravin
+Date: 2007-08-17 08:49:41 +0200 (Fri, 17 Aug 2007)
+New Revision: 14
+
+Added:
+   trunk/CommonFileTypes/HTMLIndexer.cs
+Modified:
+   trunk/CommonFileTypes/CommonFileTypes.csproj
+   trunk/OpenDesktop.sln
+   trunk/OpenDesktop/FileExplorer.cs
+   trunk/OpenDesktop/Settings.cs
+   trunk/WebRoot/about.html
+   trunk/WebRoot/config.html
+   trunk/WebRoot/error.html
+   trunk/WebRoot/index.html
+Log:
+Added HTML Indexer and changed html files
+
+Modified: trunk/CommonFileTypes/CommonFileTypes.csproj
+===================================================================
+--- trunk/CommonFileTypes/CommonFileTypes.csproj	2006-01-28 17:27:06 UTC (rev 13)
++++ trunk/CommonFileTypes/CommonFileTypes.csproj	2007-08-17 06:49:41 UTC (rev 14)
+@@ -30,6 +30,7 @@
+   <ItemGroup>
+     <Compile Include="AssemblyInfo.cs" />
+     <Compile Include="TextIndexer.cs" />
++    <Compile Include="HTMLIndexer.cs" />
+   </ItemGroup>
+   <ItemGroup>
+     <ProjectReference Include="..\IPlugin\IPlugin.csproj">
+
+Added: trunk/CommonFileTypes/HTMLIndexer.cs
+===================================================================
+--- trunk/CommonFileTypes/HTMLIndexer.cs	2006-01-28 17:27:06 UTC (rev 13)
++++ trunk/CommonFileTypes/HTMLIndexer.cs	2007-08-17 06:49:41 UTC (rev 14)
+@@ -0,0 +1,100 @@
++/*
++ * Created by SharpDevelop.
++ * User: pravin
++ * Date: 1/22/2006
++ * Time: 8:27 PM
++ * 
++ * To change this template use Tools | Options | Coding | Edit Standard Headers.
++ */
++
++using System;
++using System.IO;
++using System.Text.RegularExpressions;
++using System.Collections.Specialized;
++
++using OpenDesktop.Plugin;
++
++namespace OpenDesktop.CommonIndexables
++{
++	/// <summary>
++	/// Responsible for indexing Text file
++	/// </summary>
++	public class HTMLIndexer : IPlugin
++	{
++		#region Member Vars
++		private string[] m_strRegisteredExtensions = { ".htm", ".html" };
++        private string[] m_strRegisteredHTMLTags = { "DisplayText" };
++        #endregion
++        
++		public HTMLIndexer()
++		{
++		}
++		
++		public string[] RegisteredHTMLTags
++		{
++			get
++			{
++				return m_strRegisteredHTMLTags;
++			}
++		}
++
++        public string PluginName 
++        {
++            get
++            {
++                return "Text Indexer";
++            }
++        }
++
++        public string[] RegisteredFileExtentions 
++        {
++            get
++            {
++                return m_strRegisteredExtensions;
++            }
++        }
++        
++        public string ProcessTag(string tag, NameValueCollection queryString)
++        {
++        	return string.Empty;
++        }
++        
++        public SearchInfo ProcessFile(string filePath)
++        {
++        	FileInfo finfo = null;
++        	SearchInfo sinfo = null;
++        	try
++        	{
++        		finfo = new FileInfo(filePath);
++        	}
++        	catch 
++        	{
++        		return null;
++        	}
++
++        	if(finfo.Length > 1 * 1024 * 1024)
++    		{
++    			return null;
++    		}
++        	
++        	string strContent = null;
++        	try
++        	{
++	        	StreamReader reader = new StreamReader(filePath);
++	        	strContent = reader.ReadToEnd();
++	        	reader.Close();
++	        	strContent = Regex.Replace(strContent, "<[^>]+>", string.Empty);
++        	}
++        	catch
++        	{
++        		return null;
++        	}
++        	
++        	string strTitle = finfo.Name;
++        	string strLauncher = "file:///" + filePath;
++        	
++        	sinfo = new SearchInfo(strTitle, strContent, strLauncher);
++        	return sinfo;
++        }
++	}
++}
+
+Modified: trunk/OpenDesktop/FileExplorer.cs
+===================================================================
+--- trunk/OpenDesktop/FileExplorer.cs	2006-01-28 17:27:06 UTC (rev 13)
++++ trunk/OpenDesktop/FileExplorer.cs	2007-08-17 06:49:41 UTC (rev 14)
+@@ -20,8 +20,10 @@
+ using System.Text;
+ using System.Threading;
+ using System.Collections;
++using System.Collections.Specialized;
+ 
+ using OpenDesktop.Plugin;
++using OpenDesktop.Properties;
+ 
+ namespace OpenDesktop
+ {
+@@ -42,7 +44,7 @@
+ 		private NameObjectCollection m_fileFunctionMap;
+ 		private Thread m_objThread;
+ 		private bool _quit;
+-		private Hashtable m_htDNV; // Donot visit hashmap
++		private ListDictionary m_DNV; // Donot visit hashmap
+ 		Indexer m_indexer;
+ 		private int m_iNumDocsDone;
+ 		private bool m_bAgressive = false; // true = dont sleep between documents
+@@ -82,7 +84,7 @@
+ 		{
+ 			m_fileFunctionMap = fileFunctionMap;
+ 			_quit = false;
+-			//TODO: m_htDNV = 
++			m_DNV = Settings.Instance.DNV;
+ 			m_indexer = new Indexer(Properties.Settings.Instance.TempIndexPath, IndexMode.CREATE);
+ 		}
+ 
+@@ -267,7 +269,9 @@
+ 					return;
+ 				try
+ 				{
+-					Explore(strDir);
++					//FIXME: Make this case-insensitive
++					if(!m_DNV.Contains(directory))
++						Explore(strDir);
+ 				}
+ 				catch (Exception e) // Out of stack exception?
+ 				{
+
+Modified: trunk/OpenDesktop/Settings.cs
+===================================================================
+--- trunk/OpenDesktop/Settings.cs	2006-01-28 17:27:06 UTC (rev 13)
++++ trunk/OpenDesktop/Settings.cs	2007-08-17 06:49:41 UTC (rev 14)
+@@ -24,10 +24,12 @@
+ 		private static Settings _instance = null;
+ 		
+ 		private string m_strAppData;
++		private string m_strConfigFilePath;
+ 		private string m_strIndexPath;
+ 		private string m_strTempIndexPath;
+ 		private DateTime m_dtIndexLastUpdated;
+ 		private int m_indexUpdateFreq;
++		private ListDictionary m_dnv;
+ 		#endregion
+ 		
+ 		/// <summary>
+@@ -37,7 +39,10 @@
+ 		{
+ 			// TODO: If Settings is empty, fill it up with default values and save
+ 			m_strAppData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OpenDesktop");
++			m_strConfigFilePath = Path.Combine(m_strAppData, "config.ini");
+ 			
++			m_dnv = new ListDictionary();
++			
+ 			ReadConfig();
+ 		}
+ 		
+@@ -62,16 +67,13 @@
+ 		}
+ 		#endregion
+ 		
++		#region Getters/Setters
+ 		public string IndexPath
+ 		{
+ 			get
+ 			{
+ 				return m_strIndexPath;
+ 			}
+-			set
+-			{
+-				;
+-			}
+ 		}
+ 		
+ 		public string TempIndexPath
+@@ -80,10 +82,6 @@
+ 			{
+ 				return m_strTempIndexPath;
+ 			}
+-			set
+-			{
+-				;
+-			}
+ 		}
+ 		
+ 		public DateTime IndexLastUpdated
+@@ -106,6 +104,18 @@
+ 			}
+ 		}
+ 		
++		/// <summary>
++		/// Returns a list of folders to NOT explore
++		/// </summary>
++		public ListDictionary DNV
++		{
++			get
++			{
++				return m_dnv;
++			}
++		}
++		#endregion
++		
+ 		private void ReadConfig()
+ 		{
+ 			// Set Default values
+@@ -113,11 +123,27 @@
+ 			m_strTempIndexPath = Path.Combine(m_strAppData, "TempIndex");
+ 			m_dtIndexLastUpdated = DateTime.MinValue;
+ 			m_indexUpdateFreq = 24;
++			// Add a few values to dnv
++			m_dnv.Add(Environment.GetFolderPath(Environment.SpecialFolder.System), null);
++			m_dnv.Add(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), null);
++			m_dnv.Add(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), null);
++			m_dnv.Add(Environment.GetFolderPath(Environment.SpecialFolder.History), null);
++			m_dnv.Add(Environment.GetFolderPath(Environment.SpecialFolder.InternetCache), null);
++			m_dnv.Add(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), null);
+ 			
+-			string strConfigFilePath = Path.Combine(m_strAppData, "config.ini");
+-			if(!File.Exists(strConfigFilePath))
++			if(!File.Exists(m_strConfigFilePath))
+ 				return;
+-			StreamReader reader = new StreamReader(strConfigFilePath);
++			
++			StreamReader reader = null;
++			
++			try
++			{
++				reader = new StreamReader(m_strConfigFilePath);
++			}
++			catch (IOException)
++			{
++				return;
++			}
+ 			while(true)
+ 			{
+ 				string strLine = reader.ReadLine();
+@@ -149,6 +175,11 @@
+ 					case "IndexUpdateFreq":
+ 						m_indexUpdateFreq = Int32.Parse(strNameValue[1].Trim());
+ 						break;
++					case "ExcludeFolder":
++						string strFolder = strNameValue[1].Trim();
++						if(!m_dnv.Contains(strFolder))
++							m_dnv.Add(strFolder, null);
++						break;
+ 				}
+ 				
+ 			}
+@@ -160,7 +191,28 @@
+ 		/// </summary>
+ 		public void Save()
+ 		{
++			StreamWriter writer = null;
++			try
++			{
++				writer = new StreamWriter(m_strConfigFilePath, false, System.Text.Encoding.UTF8);
++			}
++			catch(IOException e)
++			{
++				Logger.Instance.LogException(e);
++				return;
++			}
+ 			
++			writer.WriteLine("IndexPath" + "=" + m_strIndexPath);
++			writer.WriteLine("TempIndexPath" + "=" + m_strTempIndexPath);
++			writer.WriteLine("IndexLastUpdated" + "=" + m_dtIndexLastUpdated.ToString());
++			writer.WriteLine("IndexUpdateFreq" + "=" + m_indexUpdateFreq.ToString());
++			
++			foreach (string folder in m_dnv.Keys)
++			{
++				writer.WriteLine("ExcludeFolder" + "=" + folder);
++			}
++			
++			writer.Close();
+ 		}
+ 		
+ 		public string ProcessTag(NameValueCollection queryString)
+@@ -174,14 +226,14 @@
+ 					// First time user
+ 
+ 				}
+-				Settings.Instance.IndexPath = queryString["IndexPath"];
+-				Settings.Instance.TempIndexPath = queryString["TempIndexPath"];
++//				Settings.Instance.IndexPath = queryString["IndexPath"];
++//				Settings.Instance.TempIndexPath = queryString["TempIndexPath"];
+ 			}
+ 			sbResult.Append(@"<form action=""config.html"" method=""post"">");
+ 			sbResult.Append(@"<table cellspacing=""2"" cellpadding=""2"" border=""0"">");
+-			sbResult.Append(@"<tr><td colspan=""2""><b>Index Settings:</b></td></tr>");
+-			sbResult.Append(@"<tr><td>Index Path:</td><td><input type=""file"" name=""IndexPath"" value=""" + Settings.Instance.IndexPath + @""" /></td></tr>");
+-			sbResult.Append(@"<tr><td>Temp Path:</td><td><input type=""file"" name=""TempIndexPath"" value=""" + Settings.Instance.TempIndexPath + @""" /></td></tr>");
++//			sbResult.Append(@"<tr><td colspan=""2""><b>Index Settings:</b></td></tr>");
++//			sbResult.Append(@"<tr><td>Index Path:</td><td><input type=""file"" name=""IndexPath"" value=""" + Settings.Instance.IndexPath + @""" /></td></tr>");
++//			sbResult.Append(@"<tr><td>Temp Path:</td><td><input type=""file"" name=""TempIndexPath"" value=""" + Settings.Instance.TempIndexPath + @""" /></td></tr>");
+ 			sbResult.Append(@"<tr><td>Update Frequency:</td><td><input type=""text"" name=""UpdateFrequency"" size=""4"" value=""" + Settings.Instance.IndexUpdateFrequency + @"""/>hrs</td></tr>");
+ 			sbResult.Append(@"<tr><td colspan=""2""><b>Startup:</b></td></tr>");
+ 			sbResult.Append(@"<tr><td colspan=""2""><input type=""checkbox"" name=""LaunchAtStartup"" /> Launch OpenDesktop when windows starts</td></tr>");
+
+Modified: trunk/OpenDesktop.sln
+===================================================================
+--- trunk/OpenDesktop.sln	2006-01-28 17:27:06 UTC (rev 13)
++++ trunk/OpenDesktop.sln	2007-08-17 06:49:41 UTC (rev 14)
+@@ -1,5 +1,6 @@
+-?Microsoft Visual Studio Solution File, Format Version 9.00
+-# SharpDevelop 2.0.0.1017
++?
++Microsoft Visual Studio Solution File, Format Version 9.00
++# Visual C# Express 2005
+ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenDesktop", "OpenDesktop\OpenDesktop.csproj", "{61CB7178-B1C3-4C40-88FC-29A417A7A705}"
+ EndProject
+ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "IPlugin", "IPlugin\IPlugin.csproj", "{3668A126-BE07-4692-82C4-B061F1212105}"
+@@ -16,29 +17,28 @@
+ 		Release|Any CPU = Release|Any CPU
+ 	EndGlobalSection
+ 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
++		{61CB7178-B1C3-4C40-88FC-29A417A7A705}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{61CB7178-B1C3-4C40-88FC-29A417A7A705}.Debug|Any CPU.Build.0 = Debug|Any CPU
++		{61CB7178-B1C3-4C40-88FC-29A417A7A705}.Release|Any CPU.ActiveCfg = Release|Any CPU
++		{61CB7178-B1C3-4C40-88FC-29A417A7A705}.Release|Any CPU.Build.0 = Release|Any CPU
++		{3668A126-BE07-4692-82C4-B061F1212105}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{3668A126-BE07-4692-82C4-B061F1212105}.Debug|Any CPU.Build.0 = Debug|Any CPU
++		{3668A126-BE07-4692-82C4-B061F1212105}.Release|Any CPU.ActiveCfg = Release|Any CPU
++		{3668A126-BE07-4692-82C4-B061F1212105}.Release|Any CPU.Build.0 = Release|Any CPU
++		{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}.Debug|Any CPU.Build.0 = Debug|Any CPU
++		{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}.Release|Any CPU.ActiveCfg = Release|Any CPU
++		{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}.Release|Any CPU.Build.0 = Release|Any CPU
++		{AA685A7C-57F2-441B-A789-F1BF218FAF8D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+ 		{AA685A7C-57F2-441B-A789-F1BF218FAF8D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+-		{AA685A7C-57F2-441B-A789-F1BF218FAF8D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{AA685A7C-57F2-441B-A789-F1BF218FAF8D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+ 		{AA685A7C-57F2-441B-A789-F1BF218FAF8D}.Release|Any CPU.Build.0 = Release|Any CPU
+-		{AA685A7C-57F2-441B-A789-F1BF218FAF8D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+-		{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+-		{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+-		{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}.Release|Any CPU.Build.0 = Release|Any CPU
+-		{471900E3-8FD9-4F9B-BA90-FA1852EA75D3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+-		{3668A126-BE07-4692-82C4-B061F1212105}.Debug|Any CPU.Build.0 = Debug|Any CPU
+-		{3668A126-BE07-4692-82C4-B061F1212105}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+-		{3668A126-BE07-4692-82C4-B061F1212105}.Release|Any CPU.Build.0 = Release|Any CPU
+-		{3668A126-BE07-4692-82C4-B061F1212105}.Release|Any CPU.ActiveCfg = Release|Any CPU
+-		{61CB7178-B1C3-4C40-88FC-29A417A7A705}.Debug|Any CPU.Build.0 = Debug|Any CPU
+-		{61CB7178-B1C3-4C40-88FC-29A417A7A705}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+-		{61CB7178-B1C3-4C40-88FC-29A417A7A705}.Release|Any CPU.Build.0 = Release|Any CPU
+-		{61CB7178-B1C3-4C40-88FC-29A417A7A705}.Release|Any CPU.ActiveCfg = Release|Any CPU
+-		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Debug|Any CPU.Build.0 = Debug|Any CPU
+-		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+-		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Release|Any CPU.Build.0 = Release|Any CPU
+-		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Release|Any CPU.ActiveCfg = Release|Any CPU
++		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+ 		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+-		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+ 		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Release|Any CPU.Build.0 = Release|Any CPU
+-		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+ 	EndGlobalSection
++	GlobalSection(SolutionProperties) = preSolution
++		HideSolutionNode = FALSE
++	EndGlobalSection
+ EndGlobal
+
+Modified: trunk/WebRoot/about.html
+===================================================================
+--- trunk/WebRoot/about.html	2006-01-28 17:27:06 UTC (rev 13)
++++ trunk/WebRoot/about.html	2007-08-17 06:49:41 UTC (rev 14)
+@@ -4,7 +4,6 @@
+ <link rel=stylesheet type="text/css" href="style.css">
+ </head>
+ <body>
+-This page will tell you about yammy. <$YammyVersion$>. Yammy Version End.
+-<$DecodedConvo$>
++
+ </body>
+ </html>
+\ No newline at end of file
+
+Modified: trunk/WebRoot/config.html
+===================================================================
+--- trunk/WebRoot/config.html	2006-01-28 17:27:06 UTC (rev 13)
++++ trunk/WebRoot/config.html	2007-08-17 06:49:41 UTC (rev 14)
+@@ -3,8 +3,12 @@
+ <title>Configure OpenDesktop</title>
+ <link rel=stylesheet type="text/css" href="style.css">
+ </head>
++<body>
+ <div class="container">
+-	<div class="header"><a href="http://opendesktop.berlios.de">Website</a>
++	<div class="header">
++	<a href="about.html">About Opendesktop</a> |
++	<a href="config.html">Settings</a> |
++	<a href="http://opendesktop.berlios.de">Website</a>
+ 	</div>
+ 	<div class="content">
+ 	<div style="text-align:center">
+@@ -12,19 +16,6 @@
+ 		<div class="settings">
+ 		<h1>Configure OpenDesktop</h1>
+ 		<$OpenDesktopSettings$>
+-		<form action="config.html" method="post">
+-		<table cellspacing="2" cellpadding="2" border="0">
+-		<tr><td colspan="2"><b>Index Settings:</b></td></tr>
+-		<tr><td>Index Path:</td><td><input type="file" name="IndexPath" value="IndexPath" /></td></tr>
+-		<tr><td>Temp Path:</td><td><input type="file" name="TempPath" /></td></tr>
+-		<tr><td>Update Frequency:</td><td><input type="text" name="UpdateFrequency" size="4" />hrs</td></tr>
+-		<tr><td colspan="2"><b>Startup:</b></td></tr>
+-		<tr><td colspan="2"><input type="checkbox" name="LaunchAtStartup" /> Launch OpenDesktop when windows starts</td></tr>
+-		<tr><td colspan="2"><b>Browser Settings:</b></td></tr>
+-		<tr><td colspan="2"><input type="checkbox" name="LaunchAtStartup" /> Launch links in new window</td></tr>
+-		</table>
+-		<p align="center"><input type="submit" value="Save Settings" /></p>
+-		</form>
+ 		<!-- <span class="setup-button"><a href="intro2.html">Next Step</a></span> -->
+ 		</div>
+ 	</div>
+@@ -33,4 +24,5 @@
+ 	OpenDesktop Search &copy; 2005-2006, Pravin Paratey
+ 	</div>
+ </div>
++</body>
+ </html>
+\ No newline at end of file
+
+Modified: trunk/WebRoot/error.html
+===================================================================
+--- trunk/WebRoot/error.html	2006-01-28 17:27:06 UTC (rev 13)
++++ trunk/WebRoot/error.html	2007-08-17 06:49:41 UTC (rev 14)
+@@ -4,6 +4,23 @@
+ <link rel=stylesheet type="text/css" href="style.css">
+ </head>
+ <body>
+-<$ErrorMessage$>
++<div class="container">
++	<div class="header">
++	<a href="config.html">Settings</a>
++	<a href="http://opendesktop.berlios.de">Website</a>
++	</div>
++	<div class="content">
++	<div style="text-align:center">
++		<img src="logo.gif"/>
++		<div class="settings">
++		<h1>Error</h1>
++		<$ErrorMessage$>
++		</div>
++	</div>
++	</div>
++	<div class="footer">
++	OpenDesktop Search &copy; 2005-2006, Pravin Paratey
++	</div>
++</div>
+ </body>
+ </html>
+\ No newline at end of file
+
+Modified: trunk/WebRoot/index.html
+===================================================================
+--- trunk/WebRoot/index.html	2006-01-28 17:27:06 UTC (rev 13)
++++ trunk/WebRoot/index.html	2007-08-17 06:49:41 UTC (rev 14)
+@@ -4,7 +4,10 @@
+ <link rel=stylesheet type="text/css" href="style.css">
+ </head>
+ <div class="container">
+-	<div class="header"><a href="http://opendesktop.berlios.de">Website</a>
++	<div class="header">
++	<a href="about.html">About Opendesktop</a> |
++	<a href="config.html">Settings</a> |
++	<a href="http://opendesktop.berlios.de">Website</a>
+ 	</div>
+ 	<div class="content">
+ 	<div style="text-align:center">
+
+
+

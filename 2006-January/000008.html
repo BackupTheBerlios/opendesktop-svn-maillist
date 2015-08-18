@@ -1,0 +1,437 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<HTML>
+ <HEAD>
+   <TITLE> [Opendesktop-svn] r13 - in trunk: . CommonFileTypes OpenDesktop
+   </TITLE>
+   <LINK REL="Index" HREF="http://lists.berlios.de/pipermail/opendesktop-svn/2006-January/index.html" >
+   <LINK REL="made" HREF="mailto:opendesktop-svn%40lists.berlios.de?Subject=Re%3A%20%5BOpendesktop-svn%5D%20r13%20-%20in%20trunk%3A%20.%20CommonFileTypes%20OpenDesktop&In-Reply-To=%3C200601281727.k0SHR7Os030413%40sheep.berlios.de%3E">
+   <META NAME="robots" CONTENT="index,nofollow">
+   <style type="text/css">
+       pre {
+           white-space: pre-wrap;       /* css-2.1, curent FF, Opera, Safari */
+           }
+   </style>
+   <META http-equiv="Content-Type" content="text/html; charset=us-ascii">
+   <LINK REL="Previous"  HREF="000007.html">
+   
+ </HEAD>
+ <BODY BGCOLOR="#ffffff">
+   <H1>[Opendesktop-svn] r13 - in trunk: . CommonFileTypes OpenDesktop</H1>
+    <B>pravin at BerliOS</B> 
+    <A HREF="mailto:opendesktop-svn%40lists.berlios.de?Subject=Re%3A%20%5BOpendesktop-svn%5D%20r13%20-%20in%20trunk%3A%20.%20CommonFileTypes%20OpenDesktop&In-Reply-To=%3C200601281727.k0SHR7Os030413%40sheep.berlios.de%3E"
+       TITLE="[Opendesktop-svn] r13 - in trunk: . CommonFileTypes OpenDesktop">pravin at berlios.de
+       </A><BR>
+    <I>Sat Jan 28 18:27:07 CET 2006</I>
+    <P><UL>
+        <LI>Previous message: <A HREF="000007.html">[Opendesktop-svn] r12 - in trunk: . IPlugin OpenDesktop WebRoot YammyPlugin
+</A></li>
+        
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#8">[ date ]</a>
+              <a href="thread.html#8">[ thread ]</a>
+              <a href="subject.html#8">[ subject ]</a>
+              <a href="author.html#8">[ author ]</a>
+         </LI>
+       </UL>
+    <HR>  
+<!--beginarticle-->
+<PRE>Author: pravin
+Date: 2006-01-28 18:27:06 +0100 (Sat, 28 Jan 2006)
+New Revision: 13
+
+Added:
+   trunk/CommonFileTypes/
+   trunk/CommonFileTypes/AssemblyInfo.cs
+   trunk/CommonFileTypes/CommonFileTypes.csproj
+   trunk/CommonFileTypes/TextIndexer.cs
+Modified:
+   trunk/OpenDesktop.sln
+   trunk/OpenDesktop/FileExplorer.cs
+   trunk/OpenDesktop/IndexGeneration.cs
+   trunk/OpenDesktop/Indexer.cs
+   trunk/OpenDesktop/OpenDesktop.csproj
+   trunk/OpenDesktop/ReplaceTag.cs
+   trunk/OpenDesktop/ToDo.txt
+Log:
+o TextIndexer to index txt files
+o Indexer replaces &lt; and &gt; with &gt; and &lt; so as to not interfere with html tags
+o Search result bullet number shown in IE also (wasnt shown earlier because IE renders differently)
+
+Added: trunk/CommonFileTypes/AssemblyInfo.cs
+===================================================================
+--- trunk/CommonFileTypes/AssemblyInfo.cs	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/CommonFileTypes/AssemblyInfo.cs	2006-01-28 17:27:06 UTC (rev 13)
+@@ -0,0 +1,27 @@
++using System.Reflection;
++using System.Runtime.CompilerServices;
++
++// Information about this assembly is defined by the following
++// attributes.
++//
++// change them to the information which is associated with the assembly
++// you compile.
++
++[assembly: AssemblyTitle(&quot;&quot;)]
++[assembly: AssemblyDescription(&quot;&quot;)]
++[assembly: AssemblyConfiguration(&quot;&quot;)]
++[assembly: AssemblyCompany(&quot;&quot;)]
++[assembly: AssemblyProduct(&quot;&quot;)]
++[assembly: AssemblyCopyright(&quot;&quot;)]
++[assembly: AssemblyTrademark(&quot;&quot;)]
++[assembly: AssemblyCulture(&quot;&quot;)]
++
++// The assembly version has following format :
++//
++// Major.Minor.Build.Revision
++//
++// You can specify all values by your own or you can build default build and revision
++// numbers with the '*' character (the default):
++
++[assembly: AssemblyVersion(&quot;1.0.*&quot;)]
++
+
+Added: trunk/CommonFileTypes/CommonFileTypes.csproj
+===================================================================
+--- trunk/CommonFileTypes/CommonFileTypes.csproj	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/CommonFileTypes/CommonFileTypes.csproj	2006-01-28 17:27:06 UTC (rev 13)
+@@ -0,0 +1,41 @@
++&#65279;&lt;Project DefaultTargets=&quot;Build&quot; xmlns=&quot;<A HREF="http://schemas.microsoft.com/developer/msbuild/2003">http://schemas.microsoft.com/developer/msbuild/2003</A>&quot;&gt;
++  &lt;PropertyGroup&gt;
++    &lt;OutputType&gt;Library&lt;/OutputType&gt;
++    &lt;RootNamespace&gt;CommonFileTypes&lt;/RootNamespace&gt;
++    &lt;AssemblyName&gt;CommonFileTypes&lt;/AssemblyName&gt;
++    &lt;Configuration Condition=&quot; '$(Configuration)' == '' &quot;&gt;Debug&lt;/Configuration&gt;
++    &lt;Platform Condition=&quot; '$(Platform)' == '' &quot;&gt;AnyCPU&lt;/Platform&gt;
++    &lt;ProjectGuid&gt;{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}&lt;/ProjectGuid&gt;
++  &lt;/PropertyGroup&gt;
++  &lt;PropertyGroup Condition=&quot; '$(Configuration)' == 'Debug' &quot;&gt;
++    &lt;OutputPath&gt;bin\Debug\&lt;/OutputPath&gt;
++    &lt;Optimize&gt;False&lt;/Optimize&gt;
++    &lt;DefineConstants&gt;DEBUG;TRACE&lt;/DefineConstants&gt;
++    &lt;DebugSymbols&gt;True&lt;/DebugSymbols&gt;
++    &lt;DebugType&gt;Full&lt;/DebugType&gt;
++    &lt;CheckForOverflowUnderflow&gt;True&lt;/CheckForOverflowUnderflow&gt;
++  &lt;/PropertyGroup&gt;
++  &lt;PropertyGroup Condition=&quot; '$(Configuration)' == 'Release' &quot;&gt;
++    &lt;OutputPath&gt;bin\Release\&lt;/OutputPath&gt;
++    &lt;Optimize&gt;True&lt;/Optimize&gt;
++    &lt;DefineConstants&gt;TRACE&lt;/DefineConstants&gt;
++    &lt;DebugSymbols&gt;False&lt;/DebugSymbols&gt;
++    &lt;DebugType&gt;None&lt;/DebugType&gt;
++    &lt;CheckForOverflowUnderflow&gt;False&lt;/CheckForOverflowUnderflow&gt;
++  &lt;/PropertyGroup&gt;
++  &lt;ItemGroup&gt;
++    &lt;Reference Include=&quot;System&quot; /&gt;
++    &lt;Reference Include=&quot;System.Xml&quot; /&gt;
++  &lt;/ItemGroup&gt;
++  &lt;ItemGroup&gt;
++    &lt;Compile Include=&quot;AssemblyInfo.cs&quot; /&gt;
++    &lt;Compile Include=&quot;TextIndexer.cs&quot; /&gt;
++  &lt;/ItemGroup&gt;
++  &lt;ItemGroup&gt;
++    &lt;ProjectReference Include=&quot;..\IPlugin\IPlugin.csproj&quot;&gt;
++      &lt;Project&gt;{3668A126-BE07-4692-82C4-B061F1212105}&lt;/Project&gt;
++      &lt;Name&gt;IPlugin&lt;/Name&gt;
++    &lt;/ProjectReference&gt;
++  &lt;/ItemGroup&gt;
++  &lt;Import Project=&quot;$(MSBuildBinPath)\Microsoft.CSharp.Targets&quot; /&gt;
++&lt;/Project&gt;
+\ No newline at end of file
+
+Added: trunk/CommonFileTypes/TextIndexer.cs
+===================================================================
+--- trunk/CommonFileTypes/TextIndexer.cs	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/CommonFileTypes/TextIndexer.cs	2006-01-28 17:27:06 UTC (rev 13)
+@@ -0,0 +1,98 @@
++/*
++ * Created by SharpDevelop.
++ * User: pravin
++ * Date: 1/22/2006
++ * Time: 8:27 PM
++ * 
++ * To change this template use Tools | Options | Coding | Edit Standard Headers.
++ */
++
++using System;
++using System.IO;
++using System.Collections.Specialized;
++
++using OpenDesktop.Plugin;
++
++namespace OpenDesktop.CommonIndexables
++{
++	/// &lt;summary&gt;
++	/// Responsible for indexing Text file
++	/// &lt;/summary&gt;
++	public class TextIndexer : IPlugin
++	{
++		#region Member Vars
++		private string[] m_strRegisteredExtensions = { &quot;.txt&quot; };
++        private string[] m_strRegisteredHTMLTags = { &quot;DisplayText&quot; };
++        #endregion
++        
++		public TextIndexer()
++		{
++		}
++		
++		public string[] RegisteredHTMLTags
++		{
++			get
++			{
++				return m_strRegisteredHTMLTags;
++			}
++		}
++
++        public string PluginName 
++        {
++            get
++            {
++                return &quot;Text Indexer&quot;;
++            }
++        }
++
++        public string[] RegisteredFileExtentions 
++        {
++            get
++            {
++                return m_strRegisteredExtensions;
++            }
++        }
++        
++        public string ProcessTag(string tag, NameValueCollection queryString)
++        {
++        	return string.Empty;
++        }
++        
++        public SearchInfo ProcessFile(string filePath)
++        {
++        	FileInfo finfo = null;
++        	SearchInfo sinfo = null;
++        	try
++        	{
++        		finfo = new FileInfo(filePath);
++        	}
++        	catch 
++        	{
++        		return null;
++        	}
++
++        	if(finfo.Length &gt; 1 * 1024 * 1024)
++    		{
++    			return null;
++    		}
++        	
++        	string strContent = null;
++        	try
++        	{
++	        	StreamReader reader = new StreamReader(filePath);
++	        	strContent = reader.ReadToEnd();
++	        	reader.Close();
++        	}
++        	catch
++        	{
++        		return null;
++        	}
++        	
++        	string strTitle = finfo.Name;
++        	string strLauncher = &quot;<A HREF="file:///">file:///</A>&quot; + filePath;
++        	
++        	sinfo = new SearchInfo(strTitle, strContent, strLauncher);
++        	return sinfo;
++        }
++	}
++}
+
+Modified: trunk/OpenDesktop/FileExplorer.cs
+===================================================================
+--- trunk/OpenDesktop/FileExplorer.cs	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop/FileExplorer.cs	2006-01-28 17:27:06 UTC (rev 13)
+@@ -140,7 +140,7 @@
+ 				Logger.Instance.LogException(e);
+ 			}
+ 		}
+-
++/*
+ 		public void Pause()
+ 		{
+ 			if (m_objThread != null &amp;&amp; m_objThread.ThreadState == ThreadState.Running)
+@@ -156,16 +156,14 @@
+ 				m_objThread.Resume();
+ 			}
+ 		}
+-
++*/
+ 		public void Stop()
+ 		{
+ 			_quit = true;
+ 		}
+ 		#endregion
+ 
+-		/// &lt;summary&gt;
+-		/// Explores
+-		/// &lt;/summary&gt;
++		#region Explore
+ 		private void Explore()
+ 		{
+ 			string [] strDriveList = Environment.GetLogicalDrives();
+@@ -189,7 +187,6 @@
+ 				m_indexer.Close(); m_indexer = null;
+ 
+ 				// Lock the index as we are going to be moving it
+-				// FIXME: RACE CONDITION!!!! The code below is useless
+ 				Synchronizer.Instance.LockIndex(this);
+ 				try
+ 				{
+@@ -261,7 +258,7 @@
+ 					}
+ 				}
+ 				
+-				if(m_bAgressive)
++				if(!m_bAgressive)
+ 					Thread.Sleep(100);
+ 			}
+ 			foreach (string strDir in strDirList)
+@@ -278,5 +275,6 @@
+ 				}
+ 			}
+ 		}
++		#endregion
+ 	}
+ }
+
+Modified: trunk/OpenDesktop/IndexGeneration.cs
+===================================================================
+--- trunk/OpenDesktop/IndexGeneration.cs	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop/IndexGeneration.cs	2006-01-28 17:27:06 UTC (rev 13)
+@@ -88,7 +88,7 @@
+ 			this.lblFilePath.Text = currentFile;
+ 		}
+ 		
+-		public void Dispose()
++		public new void Dispose()
+ 		{
+ 			this.Hide();
+ 			this.Close();
+
+Modified: trunk/OpenDesktop/Indexer.cs
+===================================================================
+--- trunk/OpenDesktop/Indexer.cs	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop/Indexer.cs	2006-01-28 17:27:06 UTC (rev 13)
+@@ -128,9 +128,13 @@
+ 			bool retVal = false;
+ 			if (m_bSucess &amp;&amp; (m_indexMode == IndexMode.CREATE || m_indexMode == IndexMode.APPEND))
+ 			{
++				// README: This is so that &lt; and &gt; don't interfere with existing
++				// tags in the browser
++				string strText = info.Text.Replace(&quot;&lt;&quot;, &quot;&lt;&quot;).Replace(&quot;&gt;&quot;, &quot;&gt;&quot;);
++				
+ 				Document doc = new Document();
+ 				doc.Add(Field.UnIndexed(&quot;title&quot;, info.Title));
+-				doc.Add(Field.Text(&quot;content&quot;, info.Text));
++				doc.Add(Field.Text(&quot;content&quot;, strText));
+ 				doc.Add(Field.UnIndexed(&quot;launcher&quot;, info.Launcher));
+ 				m_indexWriter.AddDocument(doc);
+ 				retVal = true;
+
+Modified: trunk/OpenDesktop/OpenDesktop.csproj
+===================================================================
+--- trunk/OpenDesktop/OpenDesktop.csproj	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop/OpenDesktop.csproj	2006-01-28 17:27:06 UTC (rev 13)
+@@ -57,7 +57,9 @@
+     &lt;EmbeddedResource Include=&quot;OpenDesktop.resources&quot;&gt;
+       &lt;CopyToOutputDirectory&gt;Never&lt;/CopyToOutputDirectory&gt;
+     &lt;/EmbeddedResource&gt;
+-    &lt;Compile Include=&quot;IndexGeneration.cs&quot; /&gt;
++    &lt;Compile Include=&quot;IndexGeneration.cs&quot;&gt;
++      &lt;SubType&gt;Form&lt;/SubType&gt;
++    &lt;/Compile&gt;
+     &lt;EmbeddedResource Include=&quot;IndexGeneration.resx&quot;&gt;
+       &lt;DependentUpon&gt;IndexGeneration.cs&lt;/DependentUpon&gt;
+     &lt;/EmbeddedResource&gt;
+
+Modified: trunk/OpenDesktop/ReplaceTag.cs
+===================================================================
+--- trunk/OpenDesktop/ReplaceTag.cs	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop/ReplaceTag.cs	2006-01-28 17:27:06 UTC (rev 13)
+@@ -161,15 +161,15 @@
+                     string.Format(Properties.Resources.SearchResultsHeader,
+                     (iStartAt + 1).ToString(), iEndAt.ToString(),
+                     sinfo.Length.ToString(), strSearchTerm) + &quot;&lt;/div&gt;&quot;);
+-                sb.Append(&quot;&lt;ol class=\&quot;search-results\&quot;&gt;&quot;);
++                sb.Append(&quot;&lt;div class=\&quot;search-results\&quot;&gt;&lt;ol&gt;&quot;);
+ 
+                 for (int i = iStartAt; i &lt; iEndAt; i++)
+                 {
+                     string strDisplayText = GetExcerpt(sinfo[i].Text, strSearchTerm);
+                     sb.Append(&quot;&lt;li value=\&quot;&quot; + (i+1).ToString() + &quot;\&quot;&gt;&lt;a href=\&quot;&quot; + sinfo[i].Launcher + 
+-                        &quot;\&quot;&gt;&quot; + sinfo[i].Title + &quot;&lt;/a&gt;&lt;br /&gt;&quot; + strDisplayText + &quot;&lt;/li&gt;&quot;);
++                        &quot;\&quot;&gt;&lt;span style=\&quot;font-size:12pt\&quot;&gt;&quot; + sinfo[i].Title + &quot;&lt;/span&gt;&lt;/a&gt;&lt;br /&gt;&quot; + strDisplayText + &quot;&lt;/li&gt;&quot;);
+                 }
+-                sb.Append(&quot;&lt;/ol&gt;&quot;);
++                sb.Append(&quot;&lt;/ol&gt;&lt;/div&gt;&quot;);
+                 int iCurPageNum = (iStartAt/10);
+                 string strPrevUrl = string.Empty;
+                 string strNextUrl = string.Empty;
+
+Modified: trunk/OpenDesktop/ToDo.txt
+===================================================================
+--- trunk/OpenDesktop/ToDo.txt	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop/ToDo.txt	2006-01-28 17:27:06 UTC (rev 13)
+@@ -1,6 +1,4 @@
+ - Weird Lucene results for words &quot;a b&quot; and &quot;b a&quot; interchanged. 
+   For one, number of results differ!
+-- favicon.ico must go as image/ico DONE
+-- config must ask user where the index directory will be
+-- Monitor locks used in Synchronizer. Are they okay?
+-- Implement DNV
+\ No newline at end of file
++- Implement DNV
++- Add x documents indexed
+\ No newline at end of file
+
+Modified: trunk/OpenDesktop.sln
+===================================================================
+--- trunk/OpenDesktop.sln	2006-01-22 11:25:28 UTC (rev 12)
++++ trunk/OpenDesktop.sln	2006-01-28 17:27:06 UTC (rev 13)
+@@ -8,6 +8,8 @@
+ EndProject
+ Project(&quot;{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}&quot;) = &quot;YammyPlugin&quot;, &quot;YammyPlugin\YammyPlugin.csproj&quot;, &quot;{AA685A7C-57F2-441B-A789-F1BF218FAF8D}&quot;
+ EndProject
++Project(&quot;{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}&quot;) = &quot;CommonFileTypes&quot;, &quot;CommonFileTypes\CommonFileTypes.csproj&quot;, &quot;{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}&quot;
++EndProject
+ Global
+ 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+ 		Debug|Any CPU = Debug|Any CPU
+@@ -34,5 +36,9 @@
+ 		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+ 		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Release|Any CPU.Build.0 = Release|Any CPU
+ 		{05A105EF-85CF-4AE3-8230-5E262FBF1869}.Release|Any CPU.ActiveCfg = Release|Any CPU
++		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Debug|Any CPU.Build.0 = Debug|Any CPU
++		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Release|Any CPU.Build.0 = Release|Any CPU
++		{4F42C2C6-6A5C-418F-9ED1-17938434E4BC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+ 	EndGlobalSection
+ EndGlobal
+
+
+</PRE>
+
+<!--endarticle-->
+    <HR>
+    <P><UL>
+        <!--threads-->
+	<LI>Previous message: <A HREF="000007.html">[Opendesktop-svn] r12 - in trunk: . IPlugin OpenDesktop WebRoot YammyPlugin
+</A></li>
+	
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#8">[ date ]</a>
+              <a href="thread.html#8">[ thread ]</a>
+              <a href="subject.html#8">[ subject ]</a>
+              <a href="author.html#8">[ author ]</a>
+         </LI>
+       </UL>
+
+<hr>
+<a href="https://lists.berlios.de/mailman/listinfo/opendesktop-svn">More information about the Opendesktop-svn
+mailing list</a><br>
+</body></html>
